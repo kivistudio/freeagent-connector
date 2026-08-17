@@ -1,4 +1,4 @@
-# freeagent-mcp-remote
+# freeagent-connector
 
 This "connector" was built to give Claude access to my
 [FreeAgent](https://www.freeagent.com/) data. At this point it is an internal tool, however
@@ -6,7 +6,9 @@ I tried to write clearly and for the general public in case it would be useful f
 If you need help to set up, adapt, or if you'd like a similar tool for your business,
 [ask a question](../../discussions).
 
-Inspired by [samaxbytez/freeagent-mcp](https://github.com/samaxbytez/freeagent-mcp) Although initially I thought I'd be developing on top of it I decided to start from scratch using [https://gofastmcp.com] and Python.
+Inspired by [samaxbytez/freeagent-mcp](https://github.com/samaxbytez/freeagent-mcp). Although
+initially I thought I'd be developing on top of it, I decided to start from scratch using
+[FastMCP](https://gofastmcp.com) and Python.
 
 - **WIP** — "work in progress". A term used by developers, used throughout this readme to
   mark functionality that is not yet available. Equivalent to "coming soon".
@@ -36,8 +38,6 @@ Additional reading:
 explains it in plain terms (think "a USB-C port for AI").
 
 [Get started with custom connectors](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp).
-
----
 
 # Setup
 
@@ -90,7 +90,8 @@ Other platforms, and other ways to install it, are covered in
 Then:
 
 ```bash
-git clone <this-repo> && cd freeagent-mcp-remote
+git clone https://github.com/kivistudio/freeagent-connector.git
+cd freeagent-connector
 uv sync                 # creates .venv, installs everything, fetches Python 3.14
 cp .env.example .env    # then add the credentials from the step above
 ```
@@ -117,8 +118,6 @@ so this is genuinely a one-time step.
 > `FREEAGENT_API_BASE_URL=https://api.sandbox.freeagent.com/v2`, and the login endpoints
 > follow automatically so the two can't get crossed. Worth doing before anything that
 > writes; not worth it for reading, since a sandbox has none of your actual data.
-
----
 
 # Using the command-line tool
 
@@ -184,8 +183,6 @@ uv run fastmcp call scripts/freeagent_api_caller.py request path=/invoices shape
 Changing data (`POST`, `PUT`, `DELETE`) needs `confirm_write=true`. That's deliberate
 friction — these are your real accounting records. Use the sandbox for those.
 
----
-
 # [WIP] The Claude connector
 
 Not ready yet. When it is, you'll be able to add this to Claude as a connector and ask
@@ -202,8 +199,6 @@ questions in plain language rather than calling endpoints yourself:
 The difference from the command-line tool is that the connector exposes each of these as a
 separate, narrow capability rather than one general "call anything" command — for reasons
 under [Safety](#safety) below.
-
----
 
 # For developers
 
@@ -277,8 +272,6 @@ never inputs to the program — deleting any of them costs nothing but a slower 
 
 If anything ever behaves strangely, `rm -rf .mypy_cache .pytest_cache .ruff_cache` is a
 safe reset.
-
----
 
 # If you get stuck
 
