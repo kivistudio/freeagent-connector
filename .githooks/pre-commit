@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+#
+# Pre-commit checks. The whole suite runs in about two seconds, so it checks everything
+# rather than trying to be clever about which files changed.
+#
+# To commit without running these:  git commit --no-verify
+#
+# Lives in .githooks/ rather than .git/hooks/ so it is version controlled. Enable with:
+#   git config core.hooksPath .githooks
+
+set -uo pipefail
+
+RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; DIM=$'\033[2m'; OFF=$'\033[0m'
+failed=0
+
+step() {
+    local label="$1"; shift
+    printf '  %s… ' "$label"
+    if output=$("$@" 2>&1); then
+        printf '%sok%s\n' "$GREEN" "$OFF"
+    else
+        printf '%sfailed%s\n' "$RED" "$OFF"
+        printf '%s\n' "$output" | sed 's/^/    /'
+        failed=1
+    fi
+}
+
+# --- Secrets ---------------------------------------------------------------
+# .env holds a real FreeAgent client secret and access token. It is gitignored, but
+# `git add -f` bypasses that, so this is the backstop. Not a style rule — a hard stop.
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+secrets=$(printf '%s\n' "$staged" | grep -E '(^|/)\.env$|(^|/)\.env\.(local|production)$' || true)
+if [[ -n "$secrets" ]]; then
+    printf '%sRefusing to commit credential files:%s\n' "$RED" "$OFF"
+    printf '%s\n' "$secrets" | sed 's/^/  /'
+    printf '\nThese hold live credentials. Unstage with:\n'
+    printf '%s\n' "$secrets" | sed 's/^/  git rm --cached /'
+    exit 1
+fi
+
+# --- Checks ----------------------------------------------------------------
+printf '%sRunning pre-commit checks%s\n' "$DIM" "$OFF"
+step "format " uv run ruff format --check .
+step "lint   " uv run ruff check .
+step "types  " uv run mypy
+step "tests  " uv run pytest -q
+
+if [[ "$failed" -ne 0 ]]; then
+    printf '\n%sCommit blocked.%s Fix the above, or bypass with:\n' "$RED" "$OFF"
+    printf '  %sgit commit --no-verify%s\n' "$YELLOW" "$OFF"
+    printf '%sFormatting problems are usually fixed by: uv run ruff format .%s\n' "$DIM" "$OFF"
+    exit 1
+fi
+
+printf '%sAll checks passed.%s\n' "$GREEN" "$OFF"

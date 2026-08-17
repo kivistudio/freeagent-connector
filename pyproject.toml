@@ -1,0 +1,56 @@
+[project]
+name = "freeagent-mcp-remote"
+version = "0.1.0"
+description = "Remote MCP server exposing the FreeAgent accounting API over Streamable HTTP"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastmcp==4.0.0b3",
+    # The `<X.devN`/`<X.aN` upper bounds are load-bearing, not cosmetic: fastmcp v4 is a
+    # pre-release, which forces uv's global prerelease setting to "allow" (see [tool.uv]).
+    # Without these bounds that setting silently pulls httpx onto 1.0.dev* and pydantic
+    # onto 2.14.0b*. These keep everything except fastmcp on its stable line.
+    "httpx>=0.28,<1.0.dev0",
+    "pydantic>=2.11,<2.14.0a0",
+    "uvicorn>=0.35,<1.0.dev0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio>=1.0",
+    "respx>=0.22",
+    "ruff>=0.12",
+    "mypy>=1.17",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.uv]
+# fastmcp v4 is a pre-release line (see the spec's "Version: fastmcp v4" decision).
+# "allow" is required rather than "if-necessary-or-explicit" because fastmcp's own
+# transitive pin on fastmcp-slim==4.0.0b3 does not count as explicit from here.
+# The consequence is contained by the upper bounds on [project].dependencies — without
+# those, this setting drags httpx and pydantic onto their dev lines too.
+prerelease = "allow"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["src", "tests", "scripts"]
