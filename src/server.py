@@ -1,6 +1,6 @@
 """FastMCP server for the FreeAgent connector.
 
-`create_server()` is the single, transport-agnostic factory used everywhere. It assembles
+`create_server()` is the connector's single, transport-agnostic factory. It assembles
 the configured server (auth, FreeAgent client, tools, /health) but never opens a socket —
 so "local" vs "remote" is decided by how the returned object is run and which env vars are
 set, not by a different builder:
@@ -10,7 +10,9 @@ set, not by a different builder:
 - local dev: `fastmcp dev` loads it; FREEAGENT_DEV_TOKEN swaps the OAuth flow for a token.
 
 This is the connector in `src/`; the always-local command-line caller lives in `scripts/`
-and is never deployed.
+and is never deployed. The interim read-only server (`src/readonly_server.py`) is a
+deliberately separate deployable entrypoint with its own `create_readonly_server()`
+factory, so it does not go through `create_server()`.
 """
 
 from __future__ import annotations
