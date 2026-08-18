@@ -22,12 +22,21 @@ which server is deployed; switching to the full connector later is a one-line CM
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
+from src.auth import FREEAGENT_API_BASE_URL, build_auth_provider
 from src.client import FreeAgentClient
+from src.log import logger
+from src.server import freeagent_token_provider
 from src.tools._helpers import freeagent_errors
+
+READONLY_SERVICE_NAME = "freeagent-mcp-readonly"
 
 
 def register(mcp: FastMCP, client: FreeAgentClient) -> None:
@@ -53,3 +62,48 @@ def register(mcp: FastMCP, client: FreeAgentClient) -> None:
         with freeagent_errors():
             result: dict[str, Any] = await client.get(path, params=params)
             return result
+
+
+def create_readonly_server() -> FastMCP:
+    """Build the interim read-only server: OAuth-gated, one generic read tool, /health.
+
+    Reuses the full connector's OAuth (build_auth_provider) and token retrieval
+    (freeagent_token_provider) unchanged — the only difference from create_server() is the
+    tool surface: exactly one GET-only tool instead of the per-resource modules.
+    """
+    mcp: FastMCP = FastMCP(READONLY_SERVICE_NAME, auth=build_auth_provider())
+
+    # Central tool-call logging. methods=["tools/call"] scopes it to tool invocations;
+    # the exact string matters (a wrong value logs nothing). Mirrors src/server.py.
+    mcp.add_middleware(
+        StructuredLoggingMiddleware(logger=logger, include_payloads=True, methods=["tools/call"])
+    )
+
+    client = FreeAgentClient(
+        token_provider=freeagent_token_provider,
+        base_url=os.environ.get("FREEAGENT_API_BASE_URL", FREEAGENT_API_BASE_URL),
+    )
+    register(mcp, client)
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health_check(request: Request) -> JSONResponse:
+        """Liveness probe. Bypasses auth by design and touches neither FreeAgent nor OAuth
+        state, so a cold container can answer it immediately."""
+        return JSONResponse({"status": "healthy", "service": READONLY_SERVICE_NAME})
+
+    return mcp
+
+
+def main() -> None:
+    create_readonly_server().run(
+        transport="http",
+        # Binds all interfaces because the container runtime routes to it; not directly
+        # exposed to the internet.
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "8080")),
+        stateless_http=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

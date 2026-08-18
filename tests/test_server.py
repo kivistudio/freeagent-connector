@@ -24,14 +24,6 @@ from tests.conftest import API
 BASE = "https://mcp.example.com"
 
 
-@pytest.fixture
-def oauth_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FREEAGENT_CLIENT_ID", "cid")
-    monkeypatch.setenv("FREEAGENT_CLIENT_SECRET", "csecret")
-    monkeypatch.setenv("PUBLIC_BASE_URL", BASE)
-    monkeypatch.delenv("FREEAGENT_DEV_TOKEN", raising=False)
-
-
 @contextlib.asynccontextmanager
 async def asgi_client() -> AsyncGenerator[httpx.AsyncClient]:
     """Drive the real Starlette app over ASGI, with its lifespan running, no sockets."""
