@@ -1,11 +1,8 @@
 """Thin async HTTP wrapper around the FreeAgent API.
 
 Re-expresses the request-wrapper logic from samaxbytez/freeagent-mcp's `client.ts` in
-Python — no code is copied. The path-safety guard below is the security boundary of this
+Python. The path-safety guard below is the security boundary of this
 project and must never be weakened; see `docs/plans/freeagent-mcp-remote.md`.
-
-Unlike the original, there are no form-encoded helpers: form bodies were only ever used
-for OAuth token exchange, which OAuthProxy now owns entirely.
 """
 
 from __future__ import annotations
@@ -136,7 +133,7 @@ class FreeAgentClient:
         method: str,
         path: str,
         *,
-        params: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
     ) -> httpx.Response:
         """Make a guarded request and return the raw response.
@@ -176,7 +173,7 @@ class FreeAgentClient:
         method: str,
         path: str,
         *,
-        params: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
     ) -> Any:
         """Make a guarded request and return the decoded JSON body."""
@@ -185,14 +182,14 @@ class FreeAgentClient:
             return {}
         return response.json()
 
-    async def get(self, path: str, params: dict[str, str] | None = None) -> Any:
+    async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return await self.request("GET", path, params=params)
 
     async def post(
         self,
         path: str,
         json: dict[str, Any] | None = None,
-        params: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> Any:
         return await self.request("POST", path, params=params, json_body=json)
 
@@ -200,9 +197,9 @@ class FreeAgentClient:
         self,
         path: str,
         json: dict[str, Any] | None = None,
-        params: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> Any:
         return await self.request("PUT", path, params=params, json_body=json)
 
-    async def delete(self, path: str, params: dict[str, str] | None = None) -> Any:
+    async def delete(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return await self.request("DELETE", path, params=params)

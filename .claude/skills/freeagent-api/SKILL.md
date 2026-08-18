@@ -9,6 +9,16 @@ Design tool shapes against real responses instead of guessing. FreeAgent's docs 
 gaps, contradictions and at least two copy-paste errors, so **the API is the authority,
 not the docs**.
 
+## Reference
+
+- **FreeAgent API documentation**: <https://dev.freeagent.com/> — the endpoint, field and
+  attribute reference. A useful starting point for *what exists*, but not the final word.
+  Order of authority: (1) the live API via the `request` tool below — the only real
+  answer; (2) these docs — helpful but with the gaps, internal contradictions and
+  copy-paste errors noted above; (3) the tool inventory
+  (`docs/plans/freeagent-mcp-remote-tool-inventory.md`), a research guide. Confirm
+  anything that matters against the live API before relying on it.
+
 ## Setup (once)
 
 1. `.env` needs `FREEAGENT_CLIENT_ID` and `FREEAGENT_CLIENT_SECRET` from the registered
