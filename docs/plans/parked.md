@@ -35,13 +35,15 @@ instructions across `README.md` and `.env.example`), so they do not appear here.
   one already exists — this is a small change, parked only because it is a performance
   nicety rather than a correctness problem.
 
-- [ ] **Auth events log under a tool-shaped logger name.** `src/auth.py` imports `logger`
-  from `src/utils.py`, where it is named `freeagent_mcp.tools` for tool-call logging.
-  Anyone raising that logger's level to debug tool calls also switches on
-  token-verification logging, and anyone looking for auth logs won't think to look under
-  that name. Give auth its own `logging.getLogger("freeagent_mcp.auth")`. Note that
-  `tests/test_utils.py` filters on the existing name, so check what the tests assert before
-  changing it.
+- [ ] **Auth and tool logging share one logger name, so their levels can't be set
+  independently.** `src/auth.py` and the tool-call middleware in `src/server.py` both use
+  the single `logger` (`freeagent_mcp`) defined in `src/log.py`. The misleading
+  *tool-shaped* name is no longer the problem (it was renamed from `freeagent_mcp.tools`),
+  but the coupling remains: anyone raising that logger to debug tool calls also switches on
+  token-verification logging, and vice versa. If that becomes a nuisance, give each area a
+  child logger — `freeagent_mcp.auth` and `freeagent_mcp.tools` — under the shared parent.
+  Note that `tests/test_server.py` filters on the `freeagent_mcp` name, so check what the
+  test asserts before changing it.
 
 - [ ] **`except ValueError, TypeError:` is Python 3.14-only syntax.** In `src/client.py`,
   the unparenthesised form (PEP 758) is correct for this project — `requires-python` is

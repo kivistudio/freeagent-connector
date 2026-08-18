@@ -27,7 +27,8 @@ it, not a replacement for it.
 ```
 src/
 ├── client.py     # FreeAgentClient — httpx wrapper, with the origin-check security guard
-├── utils.py      # safe_id, build_params, build_body, log_tool_call, response/error helpers
+├── utils.py      # safe_id, build_params, build_body, response/error helpers
+├── log.py        # The shared application logger (freeagent_mcp)
 ├── auth.py       # Builds the OAuthProxy instance (FreeAgent upstream config)
 ├── server.py     # FastMCP instance, /health route, tool registration, stateless_http=True
 └── tools/        # One file per resource group; each exports register(mcp, client)
@@ -51,15 +52,18 @@ it.
 Every resource file in `src/tools/` exports `@mcp.tool()`-decorated async
 functions. Each handler:
 
-1. Calls `log_tool_call(name, args)` first.
-2. Uses `FreeAgentClient` to hit the API with a **relative** path.
-3. Returns plain Python values (dict/list) — FastMCP wraps them into MCP
+1. Uses `FreeAgentClient` to hit the API with a **relative** path.
+2. Returns plain Python values (dict/list) — FastMCP wraps them into MCP
    content blocks automatically.
-4. Raises `fastmcp.exceptions.ToolError` on failure, not a returned
+3. Raises `fastmcp.exceptions.ToolError` on failure, not a returned
    error-shaped value.
-5. Uses `build_params(...)` for query strings, `build_body(...)` for request
+4. Uses `build_params(...)` for query strings, `build_body(...)` for request
    bodies (wrapped in the resource's singular key, e.g.
    `{"contact": build_body({...})}`).
+
+Handlers do **not** log themselves. Every `tools/call` is logged centrally by
+`StructuredLoggingMiddleware`, wired once in `src/server.py`, so a new module
+cannot forget to log.
 
 **IDs are interpolated into request paths**, so every ID parameter MUST use
 `safe_id` validation (regex `^[a-zA-Z0-9_-]+$`).
@@ -102,6 +106,24 @@ Full per-resource endpoint/field/quirk detail:
   in-memory `Client` for tool-invocation tests.
 - **Commits**: Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`,
   `refactor:`, `test:`, `ci:`, `perf:`).
+
+## Check FastMCP first, before hand-rolling
+
+FastMCP is the framework this server is built on, and it does far more than register
+tools — it has middleware, structured logging, error handling, context/state, auth
+integrations and more. **Before reaching for general Python knowledge to build a mechanism
+by hand, check whether FastMCP already provides it.** Consult the docs at
+<https://gofastmcp.com/> (and the installed version's own API — note we pin a pre-release,
+`fastmcp==4.0.0b3`, so a docs feature may differ or not exist yet in our version; confirm
+against what's installed). Default to "does the framework own this?" rather than "how
+would I normally do this in Python?".
+
+Reinventing something the framework owns means more code to maintain and code that drifts
+from the framework's conventions and lifecycle. Tool-call logging is the worked example:
+it started as a hand-rolled `log_tool_call` called manually in every handler, and is now
+FastMCP's `StructuredLoggingMiddleware` registered once in `src/server.py` — one place
+instead of a call a new handler could forget. Where the framework genuinely doesn't cover
+a need, hand-rolling is fine — but establish that first, don't assume it.
 
 ## Keeping the plan docs current
 
@@ -201,6 +223,31 @@ shouldn't.
 "unlock", "transform", "solutions", "take your X to the next level", no exclamation
 marks, no calls to action. The contact section is a plain offer of help from a person who
 happens to do this for a living — if a sentence would fit in a landing page, rewrite it.
+
+## Writing specs and code comments
+
+The previous section is about public-facing copy. Internal technical writing — the plan
+docs in `docs/plans/` and `docs/superpowers/plans/`, and code comments — has a different
+reader: **an experienced engineer who is rusty on Python and new to this stack.** Assume
+fluency in software generally (design, testing, HTTP, security models, async as a concept)
+— don't explain what a decorator, a context manager or dependency injection *is*. Do
+explain, at first appearance:
+
+- **Python-specific idioms and syntax** a strong generalist may not recall — what
+  `@mcp.tool` actually does to the function it wraps, why `async with` here, what
+  `Annotated[str, AfterValidator(...)]` buys us, `from __future__ import annotations`,
+  `**kwargs` conventions, and `uv`/packaging behaviour.
+- **Stack-specific concepts** — FastMCP, `OAuthProxy`, MCP protocol details, `respx`,
+  pytest fixtures — the first time each shows up.
+
+This is the same gap described in "Working with this repo's author" below — it applies to
+written artifacts and live conversation alike.
+
+The test: a comment or spec passage earns its place if it saves a capable-but-rusty reader
+a trip to the docs, and wastes space if it explains something they'd know from any
+language. Prefer *why* over *what* — the code already says what it does; the comment says
+why it's done this way. The existing comments in `src/client.py` and `src/auth.py` are the
+model to match.
 
 ## Working with this repo's author
 

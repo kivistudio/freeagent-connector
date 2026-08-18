@@ -5,12 +5,11 @@ request path, so `safe_id` is the gate that stops a path-traversal payload reach
 `FreeAgentClient` in the first place (client.py's origin guard is the second gate).
 """
 
-import logging
-
+import httpx
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from src.utils import SafeId, build_body, build_params, log_tool_call, safe_id
+from src.utils import SafeId, build_body, build_params, safe_id
 
 
 class TestSafeId:
@@ -57,21 +56,24 @@ class TestBuildParams:
     def test_drops_none_values(self) -> None:
         assert build_params(view="all", contact=None) == {"view": "all"}
 
-    def test_stringifies_numbers(self) -> None:
-        assert build_params(page=2, per_page=50) == {"page": "2", "per_page": "50"}
-
-    def test_renders_booleans_lowercase(self) -> None:
-        """str(True) is 'True', which FreeAgent does not accept. Must be 'true'."""
-        assert build_params(nested_bill_items=True, sub_accounts=False) == {
-            "nested_bill_items": "true",
-            "sub_accounts": "false",
-        }
+    def test_passes_native_types_through(self) -> None:
+        """build_params no longer stringifies; httpx renders values at request time."""
+        assert build_params(page=2, per_page=50) == {"page": 2, "per_page": 50}
 
     def test_keeps_falsy_non_none_values(self) -> None:
-        assert build_params(page=0, query="") == {"page": "0", "query": ""}
+        assert build_params(page=0, query="") == {"page": 0, "query": ""}
 
     def test_empty_input_gives_empty_dict(self) -> None:
         assert build_params() == {}
+
+    def test_httpx_renders_booleans_lowercase(self) -> None:
+        """The lowercase-boolean guarantee now lives in httpx, which builds the URL.
+
+        str(True) is 'True', which FreeAgent rejects; this pins the behaviour we rely on
+        by delegating rendering to httpx instead of stringifying in build_params.
+        """
+        params = build_params(nested_bill_items=True, sub_accounts=False)
+        assert str(httpx.QueryParams(params)) == "nested_bill_items=true&sub_accounts=false"
 
 
 class TestBuildBody:
@@ -96,22 +98,3 @@ class TestBuildBody:
 
     def test_keeps_falsy_non_none_values(self) -> None:
         assert build_body(budget=0, is_ir35=False) == {"budget": 0, "is_ir35": False}
-
-
-class TestLogToolCall:
-    def test_logs_the_tool_name(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.INFO, logger="freeagent_mcp.tools"):
-            log_tool_call("freeagent_get_company", {})
-        assert "freeagent_get_company" in caplog.text
-
-    def test_truncates_long_string_values(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Long strings are the ones most likely to carry secrets or PII."""
-        with caplog.at_level(logging.INFO, logger="freeagent_mcp.tools"):
-            log_tool_call("freeagent_create_bill", {"comments": "x" * 500})
-        assert "x" * 500 not in caplog.text
-        assert "..." in caplog.text
-
-    def test_keeps_short_values_intact(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.INFO, logger="freeagent_mcp.tools"):
-            log_tool_call("freeagent_get_bill", {"bill_id": "12345"})
-        assert "12345" in caplog.text

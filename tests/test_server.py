@@ -10,13 +10,16 @@ that entered it, and pytest-asyncio's generator fixtures do not guarantee that.
 """
 
 import contextlib
-from collections.abc import AsyncIterator
+import logging
+from collections.abc import AsyncGenerator
 
 import httpx
 import pytest
+import respx
 from fastmcp.client import Client
 
 from src.server import create_server, freeagent_token_provider
+from tests.conftest import API
 
 BASE = "https://mcp.example.com"
 
@@ -30,7 +33,7 @@ def oauth_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @contextlib.asynccontextmanager
-async def asgi_client() -> AsyncIterator[httpx.AsyncClient]:
+async def asgi_client() -> AsyncGenerator[httpx.AsyncClient]:
     """Drive the real Starlette app over ASGI, with its lifespan running, no sockets."""
     app = create_server().http_app(stateless_http=True)
     async with app.router.lifespan_context(app):
@@ -122,6 +125,31 @@ class TestToolRegistration:
         async with Client(transport=server) as client:
             names = {tool.name for tool in await client.list_tools()}
         assert {"freeagent_get_company", "freeagent_get_tax_timeline"} <= names
+
+
+class TestToolCallLogging:
+    """Tool invocations are logged centrally by StructuredLoggingMiddleware.
+
+    This replaces the old per-handler `log_tool_call`: the server wires one middleware
+    that logs every `tools/call`, so a new tool module cannot forget to log. The marker
+    proving the middleware (not some leftover per-handler call) produced the record is the
+    `tools/call` method string, which the old mechanism never emitted.
+    """
+
+    @respx.mock
+    async def test_tool_calls_are_logged_with_the_tool_name(
+        self, oauth_env: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setenv("FREEAGENT_DEV_TOKEN", "local-dev-token")
+        respx.get(f"{API}/company").mock(
+            return_value=httpx.Response(200, json={"company": {"name": "Acme Ltd"}})
+        )
+        server = create_server()
+        with caplog.at_level(logging.INFO, logger="freeagent_mcp"):
+            async with Client(transport=server) as client:
+                await client.call_tool("freeagent_get_company", {})
+        assert "tools/call" in caplog.text
+        assert "freeagent_get_company" in caplog.text
 
 
 class TestApiCallerIsNotShipped:

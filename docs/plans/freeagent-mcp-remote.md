@@ -254,10 +254,10 @@ Other relevant points from this revision:
 | File (Python) | Responsibility |
 |---|---|
 | `src/client.py` | `FreeAgentClient` — thin `httpx`-based wrapper around the FreeAgent API, with the origin-check security guard |
-| `src/utils.py` | `safe_id`, response/error helpers, `build_params`, `build_body`, `log_tool_call` |
+| `src/utils.py` | `safe_id`, response/error helpers, `build_params`, `build_body` |
 | `src/tools/*.py` | One module per FreeAgent resource group; each exports `register(mcp, client)` and defines `@mcp.tool`-decorated functions |
 | `src/auth.py` | Builds and configures the `OAuthProxy` instance (upstream FreeAgent endpoints/credentials; `client_storage` and `jwt_signing_key` left at their defaults per the storage decision above) |
-| `src/server.py` | Builds the `FastMCP` instance with `auth=<OAuthProxy instance>`, registers `/health` via `custom_route`, registers every module in `TOOL_MODULES`, runs with `stateless_http=True` |
+| `src/server.py` | Builds the `FastMCP` instance with `auth=<OAuthProxy instance>`, adds `StructuredLoggingMiddleware` for tool-call logging, registers `/health` via `custom_route`, registers every module in `TOOL_MODULES`, runs with `stateless_http=True` |
 
 There is no local authorization script in this design, and no storage module to build — `OAuthProxy`'s browser-based consent flow and its own default local file store are the entire authorization mechanism.
 
@@ -303,8 +303,9 @@ Organized by component. Each item is one meaningful deliverable.
 - [x] `src/client.py` (`FreeAgentClient`, `FreeAgentApiError`, `UnsafePathError`) with the origin-check guard
   - Python's `urljoin` behaviour was verified empirically rather than assumed. Result: `//evil.com/x` is defused by the leading-slash strip and stays on our origin, but `///evil.com/x` genuinely resolves to another host and is caught **only** by the origin comparison. Both are locked in as tests.
   - No form-encoded helpers: form bodies were only ever for OAuth token exchange, which `OAuthProxy` now owns.
-- [x] `src/utils.py` (`safe_id`, `SafeId`, `build_params`, `build_body`, `log_tool_call`)
+- [x] `src/utils.py` (`safe_id`, `SafeId`, `build_params`, `build_body`)
   - `build_params` renders booleans as `true`/`false`; Python's `str(True)` gives `"True"`, which FreeAgent rejects.
+  - Tool-call logging was originally a hand-rolled `log_tool_call` helper here; it is now FastMCP's `StructuredLoggingMiddleware`, registered once in `src/server.py`. Gotchas when wiring it: the `on_message` hook must be filtered with `methods=["tools/call"]` (the exact JSON-RPC method string — a wrong value logs nothing silently), and `StructuredLoggingMiddleware` exposes no `max_payload_length`, so there is no built-in payload truncation (the old `log_tool_call` truncation was dropped deliberately — it was never redaction).
 - [x] `build_body` added as a new shared helper; preserves falsy zeros, serialises Pydantic models
 - [x] Test coverage for both, including every security-guard rejection case
 
@@ -336,6 +337,7 @@ Full endpoint/field/quirk detail: [Tool Inventory](./freeagent-mcp-remote-tool-i
 
 ### 4. FastMCP server entrypoint
 - [x] `src/server.py`: `FreeAgentClient` built once at startup, one `FastMCP` instance with `auth=<OAuthProxy>`, `GET /health` via `@mcp.custom_route`, modules registered from `TOOL_MODULES`, runs with `stateless_http=True`
+- [x] Tool-call logging via `StructuredLoggingMiddleware` (`methods=["tools/call"]`, `include_payloads=True`), replacing the per-handler `log_tool_call`; see the utils task above for the wiring gotchas
 - [x] `FREEAGENT_DEV_TOKEN` local escape hatch — opt-in only, with a test asserting it does nothing unless explicitly set
 - [x] Test coverage against the real ASGI app: `/health` needs no credentials; `/mcp` rejects unauthenticated requests with a `WWW-Authenticate` challenge; the advertised protected-resource metadata document is followed and confirmed to exist
   - Confirmed live: the challenge points at `/.well-known/oauth-protected-resource/mcp`, and `OAuthProxy` auto-registers `/auth/callback`.
