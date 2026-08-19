@@ -176,18 +176,8 @@ FreeAgent path, GET only. This trades the connector's endpoint-per-tool guarante
 audited endpoint per tool, IDs validated by SafeId) for breadth now: a usable MCP over
 the whole read surface of the API with almost no per-resource code.
 
-Why that trade is acceptable *here* and not in `src/server.py`:
-  - Read only. No tool can create, modify or delete accounting records — the write verbs
-    are never exposed.
-  - `FreeAgentClient`'s origin guard still applies to every call, so an injected path in
-    FreeAgent data cannot send the bearer token off-origin.
-  - Single-tenant. The only reader is the account owner, reading their own books, so the
-    residual risk (an injected instruction steering a read to some *other* of the owner's
-    own data) is low.
-
-It is a SEPARATE entrypoint precisely so `src/server.py`'s `create_server()` and its
-`TestApiCallerIsNotShipped` guarantee stay intact. The container's Dockerfile CMD selects
-which server is deployed; switching to the full connector later is a one-line CMD change.
+The container's Dockerfile CMD selects which server is deployed; switching to the full
+connector later is a one-line CMD change.
 """
 
 from __future__ import annotations
@@ -216,9 +206,9 @@ def register(mcp: FastMCP, client: FreeAgentClient) -> None:
             params: Optional query-string filters, e.g. {"view": "open", "per_page": "50"}.
 
         This is a read-only window onto the FreeAgent account: it can list and fetch, but
-        never create, change or delete anything. Useful paths include "/company",
-        "/company/tax_timeline", "/contacts", "/invoices", "/bills", "/bank_accounts" and
-        "/bank_transactions".
+        never create, change or delete anything. Paths and query parameters mirror the
+        FreeAgent REST API; look up the exact endpoint, path and available filters in the
+        official docs at https://dev.freeagent.com/docs rather than guessing.
         """
         with freeagent_errors():
             result: dict[str, Any] = await client.get(path, params=params)

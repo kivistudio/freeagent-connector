@@ -47,8 +47,7 @@ def register(mcp: FastMCP, client: FreeAgentClient) -> None:
         This is a read-only window onto the FreeAgent account: it can list and fetch, but
         never create, change or delete anything. Paths and query parameters mirror the
         FreeAgent REST API; look up the exact endpoint, path and available filters in the
-        official docs at https://dev.freeagent.com/docs (search the web for them if you
-        don't have them to hand) rather than guessing.
+        official docs at https://dev.freeagent.com/docs rather than guessing.
         """
         with freeagent_errors():
             result: dict[str, Any] = await client.get(path, params=params)
