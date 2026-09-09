@@ -20,7 +20,8 @@ initially I thought I'd be developing on top of it, I decided to start from scra
 | **A FreeAgent command-line tool** — read your accounting data from a terminal | **Works now** |
 | **A Claude connector** — ask Claude questions about your books                | **WIP**       |
 
-They share the same setup, so following the steps below gets you the working half today.
+They share the same FreeAgent setup, so following the steps below gets you the working half
+today.
 
 ## How it works
 
@@ -41,10 +42,13 @@ explains it in plain terms (think "a USB-C port for AI").
 
 # Setup
 
-Needed for both the command-line tool and (later) the connector. Written assuming you can
-follow a terminal, but haven't necessarily built a Python service before.
+Written assuming you can follow a terminal, but haven't necessarily built a Python service
+before.
 
-## 1. Get FreeAgent credentials
+## Get FreeAgent credentials
+
+This is the one part of setup shared by both the command-line tool and (later) the
+connector.
 
 Before connecting to FreeAgent you need to register an "app". That gives you two strings —
 a **client ID** and a **client secret** — which together identify this server to FreeAgent.
@@ -71,7 +75,12 @@ your own account.
    into git, thanks to [`.gitignore`](.gitignore). Copy the OAuth identifier and secret
    into it as `FREEAGENT_CLIENT_ID` and `FREEAGENT_CLIENT_SECRET`.
 
-## 2. Install
+# The command-line tool
+
+This works today. It reads any part of your FreeAgent account from the terminal, handling
+the login for you.
+
+## 1. Install
 
 The only thing you need installed first is [uv](https://docs.astral.sh/uv/), a tool that
 manages Python projects. It fetches the right version of Python for you, so you don't need
@@ -101,7 +110,7 @@ cp .env.example .env    # then add the credentials from the step above
 `uv run <command>` runs things inside that environment, which is why every command below
 starts with it.
 
-## 3. Authorise
+## 2. Authorise
 
 ```bash
 uv run scripts/fa_auth.py
@@ -119,10 +128,7 @@ so this is genuinely a one-time step.
 > follow automatically so the two can't get crossed. Worth doing before anything that
 > writes; not worth it for reading, since a sandbox has none of your actual data.
 
-# Using the command-line tool
-
-This works today. It reads any part of your FreeAgent account from the terminal, handling
-the login for you.
+## Calling endpoints
 
 FreeAgent's data is organised into "endpoints" — `/company`, `/invoices`,
 `/bank_accounts` and so on. The [FreeAgent API docs](https://dev.freeagent.com/docs/) list
@@ -183,27 +189,6 @@ uv run fastmcp call scripts/freeagent_api_caller.py request path=/invoices shape
 Changing data (`POST`, `PUT`, `DELETE`) needs `confirm_write=true`. That's deliberate
 friction — these are your real accounting records. Use the sandbox for those.
 
-# [WIP] The Claude connector
-
-Not ready yet. When it is, you'll be able to add this to Claude as a connector and ask
-questions in plain language rather than calling endpoints yourself:
-
-- Work through unexplained bank transactions and suggest how to categorise them
-- Pull up the profit & loss, balance sheet or trial balance for a period
-- Look at journal entries, or post corrections
-- Prepare figures for VAT returns and corporation tax
-- Review payroll and PAYE figures
-- Think through the salary-versus-dividends split using your actual profit
-- Track time, tasks and projects
-
-The difference from the command-line tool is that the connector exposes each of these as a
-separate, narrow capability rather than one general "call anything" command — for reasons
-under [Safety](#safety) below.
-
-A simpler, **read-only** version of the connector can be deployed and used in Claude today —
-see [Deploying the read-only connector](#deploying-the-read-only-connector) below. The full
-version described above isn't ready yet.
-
 # Deploying the read-only connector
 
 To use a connector inside Claude, the server has to live at a **public web address**. Claude
@@ -222,19 +207,34 @@ commands below are Scaleway-specific.
 
 ## What you need first
 
-- A [Scaleway](https://console.scaleway.com/) account.
 - [Docker](https://www.docker.com/products/docker-desktop/) installed and **running** — open
-  Docker Desktop and wait for it to finish starting. Docker packages the server into a
-  **container**: a single bundle holding the app and everything it needs, so it runs the same
-  on your machine and in the cloud.
-- The Scaleway command-line tool, `scw`, installed and logged in:
+  Docker Desktop and wait for it to finish starting.
+
+- A [Scaleway](https://console.scaleway.com/) account and the
+  [Scaleway CLI installed](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/). For
+  example on a Mac with Homebrew:
 
   ```bash
-  brew install scw     # on a Mac with Homebrew
-  scw init             # log in — paste the keys from Scaleway's console → IAM → API keys
+  brew install scw
   ```
 
-## A note on projects
+- A [Scaleway API key](https://www.scaleway.com/en/docs/iam/how-to/create-api-keys/) to log
+  the CLI in with. Generate one from the console → IAM → API keys; Object Storage isn't
+  needed, so you can skip that step:
+
+  ![Scaleway's "Generate an API key" dialog](docs/images/scakeway-api-token.png)
+
+  After this you will get a screen with a `scw init` command. Copy it into terminal, as well as save the API token somewhere safe.
+
+  Then log the CLI in with it:
+
+  ```bash
+  scw init             # paste the secret key when prompted
+  ```
+
+## Gotchas
+
+### A note on projects
 
 When you open the Scaleway console you land inside a **project** — a named space that holds
 your resources. Scaleway starts you with one, so an empty "Resources overview" just means
@@ -251,7 +251,7 @@ Two things so the console doesn't mislead you:
   project doesn't need. The connector runs as a lighter _Serverless Container_, created by the
   commands below — you never click "Create Instance".
 
-## The word "namespace" means two things (the confusing bit)
+### "namespace" means two things
 
 Scaleway uses "namespace" for two separate things, and this deploy touches both:
 
@@ -261,7 +261,7 @@ Scaleway uses "namespace" for two separate things, and this deploy touches both:
 Creating the Serverless Containers namespace **automatically creates a matching Container
 Registry namespace** in the same project, so you don't create the registry one separately.
 
-The ordering is what trips people up: **you have to build and push the image _before_ you can
+**you have to build and push the image _before_ you can
 finish creating the container.** If you create the namespace in the console, it drops you
 straight onto a "Deploy a Container" screen — but the **Image** field there stays empty and
 greyed out until an image has actually been pushed to the registry. So if you land on that
@@ -369,24 +369,32 @@ step 3 — reconnecting in Claude wakes it and re-approves access.
 The [deployment runbook](docs/plans/freeagent-mcp-remote-deployment.md) is the same process
 with more technical detail, including how to redeploy after a code change.
 
+# [WIP] The Claude connector
+
+Not ready yet. When it is, you'll be able to add this to Claude as a connector and ask
+questions in plain language rather than calling endpoints yourself:
+
+- Work through unexplained bank transactions and suggest how to categorise them
+- Pull up the profit & loss, balance sheet or trial balance for a period
+- Look at journal entries, or post corrections
+- Prepare figures for VAT returns and corporation tax
+- Review payroll and PAYE figures
+- Think through the salary-versus-dividends split using your actual profit
+- Track time, tasks and projects
+
+The difference from the command-line tool is that the connector exposes each of these as a
+separate, narrow capability rather than one general "call anything" command — for reasons
+under [Safety](#safety) below.
+
+A simpler, **read-only** version of the connector can be deployed and used in Claude today —
+see [Deploying the read-only connector](#deploying-the-read-only-connector) below. The full
+version described above isn't ready yet.
+
 # For developers
-
-## Everyday commands
-
-```bash
-uv run pytest                  # run the tests
-uv run pytest --lf             # just the ones that failed last time
-uv run ruff format .           # auto-format the code
-uv run ruff check .            # find likely mistakes and style problems
-uv run mypy                    # check the types line up
-```
-
-`mypy` is the one worth not skipping: it's set to strict, so it catches a whole class of
-"this could be nothing here" bugs before they ever run.
 
 ## Checks on commit
 
-A [git hook](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) runs all four
+A [git hook](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) runs checks
 automatically every time you commit. Enable it once:
 
 ```bash
