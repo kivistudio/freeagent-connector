@@ -11,3 +11,5 @@ docs/
 .mypy_cache/
 .pytest_cache/
 *.md
+# pyproject.toml declares readme = "README.md", so the build needs it in context.
+!README.md

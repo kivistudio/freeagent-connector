@@ -200,6 +200,166 @@ The difference from the command-line tool is that the connector exposes each of 
 separate, narrow capability rather than one general "call anything" command — for reasons
 under [Safety](#safety) below.
 
+A simpler, **read-only** version of the connector can be deployed and used in Claude today —
+see [Deploying the read-only connector](#deploying-the-read-only-connector) below. The full
+version described above isn't ready yet.
+
+# Deploying the read-only connector
+
+To use a connector inside Claude, the server has to live at a **public web address**. Claude
+reaches a connector from Anthropic's own servers, not from your computer, so a program
+running only on your machine can't be seen. "Deploying" just means putting the server
+somewhere on the internet that Claude can reach.
+
+What you can deploy today is the **read-only** version. It can look up anything in your
+FreeAgent account but cannot create, change or delete anything — which is what makes it safe
+to expose as a single general "read any endpoint" tool, rather than waiting for the narrow
+per-task tools of the full connector.
+
+These steps use [Scaleway](https://www.scaleway.com/), a European cloud host, because that's
+what this project was set up for. Another host that runs containers would also work, but the
+commands below are Scaleway-specific.
+
+## What you need first
+
+- A [Scaleway](https://console.scaleway.com/) account.
+- [Docker](https://www.docker.com/products/docker-desktop/) installed and **running** — open
+  Docker Desktop and wait for it to finish starting. Docker packages the server into a
+  **container**: a single bundle holding the app and everything it needs, so it runs the same
+  on your machine and in the cloud.
+- The Scaleway command-line tool, `scw`, installed and logged in:
+
+  ```bash
+  brew install scw     # on a Mac with Homebrew
+  scw init             # log in — paste the keys from Scaleway's console → IAM → API keys
+  ```
+
+## A note on projects
+
+When you open the Scaleway console you land inside a **project** — a named space that holds
+your resources. Scaleway starts you with one, so an empty "Resources overview" just means
+nothing has been created in it yet. Everything the steps below create — the registry, the
+container — appears in this project once it exists.
+
+Two things so the console doesn't mislead you:
+
+- **`scw init` decides which project your commands act on.** When it asks for a default
+  project, pick the same one you're looking at in the console — otherwise your resources land
+  in a different project than the one you're watching. The **Copy ID** button next to the
+  project's name gives you its ID if you need to check or set it.
+- **Ignore the "Create Instance" button.** An _Instance_ is a full virtual machine, which this
+  project doesn't need. The connector runs as a lighter _Serverless Container_, created by the
+  commands below — you never click "Create Instance".
+
+## The word "namespace" means two things (the confusing bit)
+
+Scaleway uses "namespace" for two separate things, and this deploy touches both:
+
+- a **Container Registry namespace** — storage that holds your built image, and
+- a **Serverless Containers namespace** — the space that holds the running service.
+
+Creating the Serverless Containers namespace **automatically creates a matching Container
+Registry namespace** in the same project, so you don't create the registry one separately.
+
+The ordering is what trips people up: **you have to build and push the image _before_ you can
+finish creating the container.** If you create the namespace in the console, it drops you
+straight onto a "Deploy a Container" screen — but the **Image** field there stays empty and
+greyed out until an image has actually been pushed to the registry. So if you land on that
+screen with nothing to select, that's expected, not a bug: leave it, do the build and push
+first, then come back and the image will be there to choose.
+
+The steps below are the command-line version, which does registry-create, build, push and
+container-create in a clear order. The console does the same things — just with the "deploy the
+container" screen appearing earlier than the image it needs.
+
+## Steps
+
+`<LIKE_THIS>` marks a value you fill in as you go; earlier steps hand you the later ones.
+
+1. **Make a place to store the built container.**
+
+   ```bash
+   scw registry namespace create name=freeagent-mcp-remote region=fr-par
+   ```
+
+   A **registry** is cloud storage for containers; a **namespace** is a named folder inside
+   it, here grouping everything for this project.
+
+2. **Build the container and upload it.**
+
+   ```bash
+   docker build -t rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest .
+   docker login rg.fr-par.scw.cloud -u nologin -p <YOUR_SCALEWAY_SECRET_KEY>
+   docker push rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest
+   ```
+
+   `<YOUR_SCALEWAY_SECRET_KEY>` is the same secret key you used for `scw init`.
+
+3. **Create the running service, and note the address it gives you.**
+
+   ```bash
+   scw container namespace create name=freeagent-mcp-remote region=fr-par
+   # note the ID it prints, as <NAMESPACE_ID>
+
+   scw container container create \
+     name=freeagent-mcp-remote \
+     namespace-id=<NAMESPACE_ID> \
+     registry-image=rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest \
+     port=8080 min-scale=0 max-scale=1 memory-limit=256 cpu-limit=140 \
+     privacy=public region=fr-par
+   # note the ID it prints, as <CONTAINER_ID>, and the public URL, as <CONTAINER_URL>
+   ```
+
+   `min-scale=0` lets the service sleep when unused, so it costs nothing while idle; it wakes
+   on the next request. The first request after a nap is slower, and you may have to approve
+   access again (see step 8).
+
+4. **Tell FreeAgent where to send you back after you approve access.**
+
+   In the [FreeAgent Developer Dashboard](https://dev.freeagent.com/), open your app and add
+   this as an **OAuth redirect URI**:
+
+   ```
+   <CONTAINER_URL>/auth/callback
+   ```
+
+   This is the connector's own address. It's separate from the `http://localhost:8723/callback`
+   you set for the command-line tool in setup — both can be registered at the same time.
+
+5. **Give the service its settings.**
+
+   ```bash
+   scw container container update <CONTAINER_ID> region=fr-par \
+     environment-variables.PORT=8080 \
+     environment-variables.PUBLIC_BASE_URL=<CONTAINER_URL> \
+     secret-environment-variables.FREEAGENT_CLIENT_ID=<YOUR_CLIENT_ID> \
+     secret-environment-variables.FREEAGENT_CLIENT_SECRET=<YOUR_CLIENT_SECRET>
+   ```
+
+   The client ID and secret are the same ones in your `.env`. Do **not** set
+   `FREEAGENT_DEV_TOKEN` here — it's a local-only shortcut, and on a public server it would be
+   a standing security hole.
+
+6. **Deploy.**
+
+   ```bash
+   scw container container deploy <CONTAINER_ID> region=fr-par
+   ```
+
+7. **Check it's alive.** Open `<CONTAINER_URL>/health` in a browser — you should see
+   `{"status": "healthy", ...}`.
+
+8. **Add it to Claude.** In Claude: Settings → Connectors → Add custom connector, and enter
+   `<CONTAINER_URL>/mcp` as the address. Leave the optional OAuth fields blank. Claude walks
+   you through approving access, which finishes on FreeAgent's own consent screen; approve
+   there and you're connected. There is no token to copy anywhere.
+
+If the connector stops responding after a quiet spell, that's the sleeping behaviour from
+step 3 — reconnecting in Claude wakes it and re-approves access.
+
+The [deployment runbook](docs/plans/freeagent-mcp-remote-deployment.md) is the same process
+with more technical detail, including how to redeploy after a code change.
+
 # For developers
 
 ## Everyday commands
@@ -282,3 +442,28 @@ If you're trying to set up something like this and it isn't going well, I do thi
 work professionally and I'm happy to talk. <!-- TODO: name + how to get in touch -->
 
 If you've found a bug or something here is wrong, an issue is welcome.
+
+# Glossary
+
+Plain-English definitions of the outside tools this project relies on. You don't need to
+understand these to follow the steps above — they're here in case a name is unfamiliar.
+
+**Docker** — a tool that packages a program together with everything it needs to run (the
+right language version, the libraries, the settings) into one self-contained bundle called a
+_container_. The point is that the bundle behaves the same on your laptop as on a cloud
+server, so "it works on my machine" stops being a gamble. Here it's used to build the
+connector into a container that Scaleway then runs.
+
+**Container** — the self-contained bundle Docker produces: the app plus its whole
+environment, kept separate from whatever else is on the machine. It starts, stops and moves
+around as a single unit.
+
+**Scaleway** — a European cloud hosting company. "The cloud" just means someone else's
+computers that you rent over the internet rather than running your own. This project runs the
+connector's container on Scaleway so it has a permanent public web address for Claude to
+reach.
+
+**Container registry** — cloud storage specifically for containers, a little like a photo
+library but for built app bundles. You upload ("push") your container to the registry, and
+the cloud pulls it from there when it runs it. A **namespace** is a named folder inside the
+registry that keeps one project's containers together.
