@@ -8,7 +8,7 @@
 
 ## Prerequisites
 
-- `freeagent-mcp-remote` builds and its Docker image runs locally (main spec, [task 5](./freeagent-mcp-remote.md#5-dockerfile-and-container-build))
+- `freeagent-mcp-remote` builds and its Docker image runs locally (main spec, [task 5](./freeagent-mcp-remote.md#5-dockerfile-and-container-build)). Note: the container needs `FREEAGENT_CLIENT_ID`, `FREEAGENT_CLIENT_SECRET` and `PUBLIC_BASE_URL` set to start — it fails fast at boot if any is missing (`auth.py::_required_env`). Dummy values suffice for a local `/health` check; the real values get set on the deployed container in [step 5](#5-set-the-containers-environment-variables-and-secrets).
 - Scaleway CLI (`scw`) installed and authenticated
 - A FreeAgent OAuth app registered at https://dev.freeagent.com/ with a client ID/secret
 

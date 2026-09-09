@@ -369,13 +369,13 @@ Full endpoint/field/quirk detail: [Tool Inventory](./freeagent-mcp-remote-tool-i
   - `.venv/`, caches, `docs/`, `tests/`
 
   Exclude all of the above explicitly.
-- [ ] Build locally and confirm `docker run` starts and `/health` succeeds without requiring valid FreeAgent/OAuthProxy credentials to be present
+- [ ] Build locally and confirm `docker run` starts and `/health` succeeds. The container needs `FREEAGENT_CLIENT_ID`, `FREEAGENT_CLIENT_SECRET` and `PUBLIC_BASE_URL` set to *start at all* — `build_auth_provider()` is called eagerly when the server is constructed (`create_readonly_server`/`create_server`) and raises on any missing one (`auth.py::_required_env`), so the process exits before uvicorn binds. Dummy values are fine for a local `/health` check: they only construct the `OAuthProxy` and are never validated against FreeAgent. No user access token is required, and `/health` itself is unauthenticated. Fail-fast on missing config is deliberate — a container that booted "healthy" without its OAuth config would pass health checks while being unable to serve a single request.
 
 ### 6. Deployment
 - [ ] Follow the [Deployment Runbook](./freeagent-mcp-remote-deployment.md): Container Registry namespace, image push, Container namespace/container (`min-scale=0`, `max-scale=1`), FreeAgent OAuth app registration + redirect URI, environment variables, deploy, add the connector in Claude (or any MCP client)
 
 ### 7. End-to-end verification
-- [ ] Local Docker smoke test: `/health` succeeds unauthenticated; an unauthenticated `POST /mcp` is rejected with a proper OAuth challenge (401 + `WWW-Authenticate`, not a bare 401 — confirm the exact spec-required response shape at implementation time)
+- [ ] Local Docker smoke test: `/health` succeeds unauthenticated; an unauthenticated `POST /mcp` is rejected with a proper OAuth challenge (401 + `WWW-Authenticate`, not a bare 401 — confirm the exact spec-required response shape at implementation time). Note: the container needs `FREEAGENT_CLIENT_ID`, `FREEAGENT_CLIENT_SECRET` and `PUBLIC_BASE_URL` set to start (dummy values suffice for this smoke test — see task 5); without them it exits at boot rather than serving `/health`.
 - [ ] Repeat against the deployed Scaleway Container
 - [ ] Live verification via an MCP client: add the connector, complete the browser OAuth consent flow (through to FreeAgent's real consent screen and back), confirm tools are listed, call `freeagent_get_company` (zero-side-effect read) and a filtered list call (e.g. `freeagent_list_projects` with a `view` param), confirm real data comes back
 - [ ] Cold-start behavior check specific to this design: force the container to scale to zero (or manually restart it), then make another tool call without reconnecting — confirm what actually happens (does the client silently re-prompt for consent, or does it show a broken-connector error requiring manual removal/re-add?). This is exploratory, not a pass/fail test — the accepted tradeoff means *some* form of reconnection is expected; the goal is understanding which form, so it's not a surprise in real use
