@@ -22,10 +22,16 @@ Note the returned namespace ID and endpoint.
 
 ### 2. Build and push the image
 ```bash
-docker build -t rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest .
+docker build --platform linux/amd64 -t rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest .
 docker login rg.fr-par.scw.cloud -u nologin -p <SCW_SECRET_KEY>
 docker push rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest
 ```
+
+`--platform linux/amd64` is required when building on an arm64 host (e.g. Apple Silicon):
+Scaleway Serverless Containers run on amd64, and an arm64 image fails at container start
+with `exec format error`. The resulting amd64 image will not run natively on an arm64 host
+— for a local smoke test, build without `--platform` first (native arch), verify, then
+rebuild with it for the push.
 
 ### 3. Create the Container namespace and container
 ```bash

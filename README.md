@@ -288,12 +288,21 @@ container" screen appearing earlier than the image it needs.
 2. **Build the container and upload it.**
 
    ```bash
-   docker build -t rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest .
+   docker build --platform linux/amd64 -t rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest .
    docker login rg.fr-par.scw.cloud -u nologin -p <YOUR_SCALEWAY_SECRET_KEY>
    docker push rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest
    ```
 
    `<YOUR_SCALEWAY_SECRET_KEY>` is the same secret key you used for `scw init`.
+
+   `--platform linux/amd64` builds the container for the kind of chip Scaleway's servers
+   use rather than your Mac's — see [Serverless containers, and which chip they run
+   on](#serverless-containers-and-which-chip-they-run-on) for why it matters. One
+   consequence: on an Apple Silicon Mac this image will **not** run on your own machine, so
+   this is not the version to test locally. If you want to check the container works before
+   deploying, build it once **without** `--platform` (which builds it for your own machine),
+   run and check that version locally, then build again **with** `--platform linux/amd64`
+   for the push above.
 
 3. **Create the running service, and note the address it gives you.**
 
@@ -432,6 +441,30 @@ never inputs to the program — deleting any of them costs nothing but a slower 
 
 If anything ever behaves strangely, `rm -rf .mypy_cache .pytest_cache .ruff_cache` is a
 safe reset.
+
+## Serverless containers, and which chip they run on
+
+Scaleway runs the connector as a _serverless container_: you hand it the built image, and
+it runs the container only while a request is being handled, then puts it back to sleep
+when nothing is using it (that is what `min-scale=0` in step 3 of the deploy does). You
+never rent or look after a server that sits running all day — you pay for the moments it is
+actually working, and the first request after a nap is a little slower while it wakes.
+
+The catch is which computer that container runs on. A container image holds real compiled
+programs — the language runtime and its libraries — and each is built for one specific kind
+of computer chip. Two matter here:
+
+- **Apple Silicon** — the M1/M2/M3 chip in most recent Macs, called _arm64_.
+- **Intel/AMD chips** — called _amd64_, which is what Scaleway's servers use.
+
+An image built for one chip will not run on the other. Build on an Apple Silicon Mac with
+no special flag and you get an _arm64_ image; push that to Scaleway, which is _amd64_, and
+it will not start. The `--platform linux/amd64` flag on `docker build` is what fixes this:
+it builds the image for Scaleway's chip rather than your Mac's. Your Mac does the build by
+translating as it goes, so it is a little slower, but the result runs on Scaleway. The same
+rule in reverse means that amd64 image will not run on an Apple Silicon Mac — which is fine,
+because it is built for Scaleway, not your laptop. If your own computer already has an
+Intel/AMD chip, the flag changes nothing, since you are building for that chip anyway.
 
 # If you get stuck
 
