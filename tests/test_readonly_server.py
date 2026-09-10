@@ -77,6 +77,32 @@ class TestFreeagentGet:
             )
         assert route.calls.last.request.url.params["view"] == "active"
 
+    @respx.mock
+    async def test_adds_pagination_metadata_when_more_pages_exist(self, server: FastMCP) -> None:
+        """The reported trap: a list truncated at a page boundary looked complete. When
+        FreeAgent advertises a next page, the tool surfaces it so the caller fetches more."""
+        next_link = '<https://api.freeagent.com/v2/invoices?page=2&per_page=25>; rel="next"'
+        respx.get(f"{API}/invoices").mock(
+            return_value=httpx.Response(
+                200,
+                json={"invoices": [{"id": 1}]},
+                headers={"Link": next_link, "X-Total-Count": "212"},
+            )
+        )
+        async with Client(transport=server) as client:
+            result = await client.call_tool("freeagent_get", {"path": "/invoices"})
+        assert result.data["invoices"] == [{"id": 1}]
+        assert result.data["pagination"] == {"next_page": 2, "total_count": 212}
+
+    @respx.mock
+    async def test_omits_pagination_when_the_list_is_complete(self, server: FastMCP) -> None:
+        """No next page means no signal to add — the body is returned unchanged, so single
+        records and complete lists keep their exact FreeAgent shape."""
+        respx.get(f"{API}/contacts").mock(return_value=httpx.Response(200, json={"contacts": []}))
+        async with Client(transport=server) as client:
+            result = await client.call_tool("freeagent_get", {"path": "/contacts"})
+        assert "pagination" not in result.data
+
 
 class TestSecurity:
     async def test_an_unsafe_path_is_blocked_by_the_origin_guard(self, server: FastMCP) -> None:

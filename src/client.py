@@ -12,7 +12,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 
@@ -77,6 +77,43 @@ def _parse_api_error(status: int, body: str) -> FreeAgentApiError:
 def _origin(url: str) -> str:
     parsed = urlparse(url)
     return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _page_number(url: str) -> int | None:
+    """Pull the integer `page` query parameter out of a pagination Link URL, if present."""
+    values = parse_qs(urlparse(url).query).get("page")
+    if not values:
+        return None
+    try:
+        return int(values[0])
+    except ValueError:
+        return None
+
+
+def _pagination_info(response: httpx.Response) -> dict[str, Any]:
+    """Extract *actionable* pagination metadata from a FreeAgent list response.
+
+    Only populated when a further page exists — a single record or a complete list needs
+    no signal, so callers can treat an empty dict as "this is everything". `httpx` has
+    already parsed the `Link` header into `response.links` (a dict keyed by rel), so we
+    read the `next` entry rather than parsing the header ourselves.
+
+    We surface the next page *number*, never the Link's absolute URL: a URL fed back as a
+    request path would be rejected by the origin guard by design, whereas a page number
+    keeps the caller on the relative-path + `page` param flow the guard is built around.
+    """
+    next_link = response.links.get("next")
+    if not next_link:
+        return {}
+
+    info: dict[str, Any] = {}
+    next_page = _page_number(next_link.get("url", ""))
+    if next_page is not None:
+        info["next_page"] = next_page
+    total = response.headers.get("X-Total-Count")
+    if total is not None and total.isdigit():
+        info["total_count"] = int(total)
+    return info
 
 
 class FreeAgentClient:
@@ -184,6 +221,23 @@ class FreeAgentClient:
 
     async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return await self.request("GET", path, params=params)
+
+    async def get_paginated(
+        self, path: str, params: dict[str, Any] | None = None
+    ) -> tuple[Any, dict[str, Any]]:
+        """GET that also surfaces FreeAgent's pagination state.
+
+        FreeAgent paginates list responses and advertises further pages via a standard
+        `Link` header plus a total in `X-Total-Count`; `get` decodes only the body and
+        drops those, so a list truncated at a page boundary is indistinguishable from a
+        complete one. This returns the decoded body alongside a pagination dict — empty
+        unless there is a next page (see `_pagination_info`) — so a caller can tell the
+        difference. It reuses `request_raw`, so it is behind the same origin guard as
+        every other request.
+        """
+        response = await self.request_raw("GET", path, params=params)
+        body = response.json() if response.text else {}
+        return body, _pagination_info(response)
 
     async def post(
         self,

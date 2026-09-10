@@ -40,17 +40,31 @@ def register(mcp: FastMCP, client: FreeAgentClient) -> None:
     async def freeagent_get(path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         """Read any FreeAgent API resource (GET only).
 
+        Ensure you know the FreeAgent API documentation (paths and argument shape) before
+        calling.
+
         Args:
             path: Relative API path, e.g. "/company", "/contacts", "/invoices/123".
-            params: Optional query-string filters, e.g. {"view": "open", "per_page": "50"}.
+            params: Optional query-string filters, e.g. {"view": "open", "per_page": "100"}.
 
-        This is a read-only window onto the FreeAgent account: it can list and fetch, but
-        never create, change or delete anything. Paths and query parameters mirror the
-        FreeAgent REST API; look up the exact endpoint, path and available filters in the
-        official docs at https://dev.freeagent.com/docs rather than guessing.
+        Note: by default only first 25 items are returned, you can change it to upto 100.
+        This is a read-only window onto the FreeAgent account: it can list and fetch.
+        Paths and query parameters mirror the
+        FreeAgent REST API.
+
+        Pagination: when a list has more pages than this call returned, the result carries
+        a "pagination" object, e.g. {"next_page": 2, "total_count": 212}; its absence means
+        the response is complete. Read the rest by calling again with {"page": "2"} (etc.)
+        in `params`. Do not conclude a record is absent from a list without checking for
+        "pagination" first — a page-sized result is often truncated, not the whole set.
         """
         with freeagent_errors():
-            result: dict[str, Any] = await client.get(path, params=params)
+            body, pagination = await client.get_paginated(path, params=params)
+            if pagination and isinstance(body, dict):
+                return {**body, "pagination": pagination}
+            # Annotate the local so the Any-typed decoded body is narrowed to the declared
+            # return type (get_paginated returns the body as Any, as JSON may be anything).
+            result: dict[str, Any] = body
             return result
 
 
