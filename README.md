@@ -205,7 +205,7 @@ These steps use [Scaleway](https://www.scaleway.com/), a European cloud host, be
 what this project was set up for. Another host that runs containers would also work, but the
 commands below are Scaleway-specific.
 
-## What you need first
+## Setup Scaleway
 
 - [Docker](https://www.docker.com/products/docker-desktop/) installed and **running** — open
   Docker Desktop and wait for it to finish starting.
@@ -222,15 +222,152 @@ commands below are Scaleway-specific.
   the CLI in with. Generate one from the console → IAM → API keys; Object Storage isn't
   needed, so you can skip that step:
 
-  ![Scaleway's "Generate an API key" dialog](docs/images/scakeway-api-token.png)
+  ![Scaleway's "Generate an API key" dialog](docs/images/scaleway-api-token.png)
 
-  After this you will get a screen with a `scw init` command. Copy it into terminal, as well as save the API token somewhere safe.
+  The screen that follows hands you a ready-made `scw init` command — paste it into your
+  terminal, and keep the secret key somewhere safe, because the console won't show it again.
+  During `scw init` the defaults are fine; the one prompt worth declining is the offer to add
+  an SSH key (that's only for logging into virtual-machine Instances, which this project
+  doesn't use).
 
-  Then log the CLI in with it:
+  `scw init` doesn't only log you in — it writes a **profile**: a small settings file on your
+  own computer (`~/.config/scw/config.yaml`) that every `scw` command reads, so you don't
+  retype your key or your project each time. It looks like this:
 
-  ```bash
-  scw init             # paste the secret key when prompted
+  ```yaml
+  active_profile: newprofile
+  profiles:
+    newprofile:
+      access_key: SCWXXXXXXXXXXXXXXXXX
+      secret_key: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+      default_organization_id: 00000000-0000-0000-0000-000000000000
+      default_project_id: 00000000-0000-0000-0000-000000000000
+      default_region: fr-par
+      default_zone: fr-par-1
   ```
+
+  A **profile** is just a named set of those settings — your API key, and which organisation,
+  project and region commands act on by default. You can keep more than one (a work account
+  and a personal one, say) and switch between them; `active_profile` names the one in use.
+  Because it lives only on your machine, you won't find "the profile" anywhere in the Scaleway
+  console.
+
+## Steps
+
+`<LIKE_THIS>` marks a value you fill in as you go; earlier steps hand you the later ones.
+
+1. **Make a place to store the built container.**
+
+   ```bash
+   scw registry namespace create name=<PROJECT_NAME> region=fr-par
+   ```
+
+   A **registry** is cloud storage for your containers; a **namespace** is a named folder inside
+   it. This command just makes the empty folder —
+   nothing is uploaded yet. You can see it afterwards in the console under **Container
+   Registry**.
+
+2. **Build the container and upload it.**
+
+   ```bash
+   docker build --platform linux/amd64 -t rg.fr-par.scw.cloud/<PROJECT_NAME>/server:latest .
+   scw registry login region=fr-par
+   docker push rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest
+   ```
+
+   These run in order: `docker build` packages the project into a container **image** on your
+   own machine; `scw registry login` signs in to your registry — with `<YOUR_SCALEWAY_SECRET_KEY>`,
+   the same secret key from `scw init`, as the password; `docker push` uploads the image into
+   the namespace you made in step 1, where it then shows up in the console under **Container
+   Registry**.
+
+   `--platform linux/amd64` builds the container for the kind of chip Scaleway's servers
+   use rather than your Mac's — see [Serverless containers, and which chip they run
+   on](#serverless-containers-and-which-chip-they-run-on) for why it matters. One
+   consequence: on an Apple Silicon Mac this image will **not** run on your own machine, so
+   this is not the version to test locally. If you want to check the container works before
+   deploying, build it once **without** `--platform` (which builds it for your own machine),
+   run and check that version locally, then build again **with** `--platform linux/amd64`
+   for the push above.
+
+3. **Create the running service, and note the address it gives you.**
+
+   ```bash
+   scw container namespace create name=freeagent-mcp-remote region=fr-par
+   # note the ID it prints, as <NAMESPACE_ID>
+   ```
+
+   This command creates a **Serverless Containers namespace** —
+   the space that _runs_ services, which is a different thing from the registry that _stores_
+   images.
+
+   ```bash
+   scw container container create \
+     name=freeagent-mcp-remote \
+     namespace-id=<NAMESPACE_ID> \
+     registry-image=rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest \
+     port=8080 min-scale=0 max-scale=1 memory-limit=256 cpu-limit=140 \
+     privacy=public region=fr-par
+   # note the ID it prints, as <CONTAINER_ID>, and the public URL, as <CONTAINER_URL>
+   ```
+
+   This creates the running container itself from the image you pushed, and prints its public web address.
+
+   Afterwards you'll find it in the console under **Containers**.
+
+   `min-scale=0` lets the service sleep when unused, so it costs nothing while idle; it wakes
+   on the next request. The first request after a nap is slower, and you may have to approve
+   access again (see step 8).
+
+4. **Tell FreeAgent where to send you back after you approve access.**
+
+   In the [FreeAgent Developer Dashboard](https://dev.freeagent.com/), open your app and add
+   this as an **OAuth redirect URI**:
+
+   ```
+   <CONTAINER_URL>/auth/callback
+   ```
+
+   This is the connector's own address. It's separate from the `http://localhost:8723/callback`
+   you set for the command-line tool in setup — both can be registered at the same time.
+
+5. **Give the service its settings.**
+
+   ```bash
+   scw container container update <CONTAINER_ID> region=fr-par \
+     environment-variables.PORT=8080 \
+     environment-variables.PUBLIC_BASE_URL=<CONTAINER_URL> \
+     secret-environment-variables.FREEAGENT_CLIENT_ID=<YOUR_CLIENT_ID> \
+     secret-environment-variables.FREEAGENT_CLIENT_SECRET=<YOUR_CLIENT_SECRET>
+   ```
+
+   The client ID and secret are the same ones in your `.env`. Do **not** set
+   `FREEAGENT_DEV_TOKEN` here — it's a local-only shortcut, and on a public server it would be
+   a standing security hole.
+
+6. **Deploy.**
+
+   ```bash
+   scw container container deploy <CONTAINER_ID> region=fr-par
+   ```
+
+   Up to now you've only _described_ the container; this applies everything you've set and
+   starts it (or restarts it with the new settings). Run it again after any later change to
+   the image or the settings.
+
+7. **Check it's alive.** Open `<CONTAINER_URL>/health` in a browser — you should see
+   `{"status": "healthy", ...}`.
+
+8. **Add it to Claude.** In Claude: Settings → Connectors → Add custom connector, and enter
+   `<CONTAINER_URL>/mcp` as the address. Leave the optional OAuth fields blank. Claude walks
+   you through approving access, which finishes on FreeAgent's own consent screen; approve
+   there and you're connected. There is no token to copy anywhere.
+
+If the connector stops responding after a quiet spell, that's the sleeping behaviour from
+step 3 — reconnecting in Claude wakes it and re-approves access.
+
+The [deployment runbook](docs/plans/freeagent-mcp-remote-deployment.md) is the same process
+with more technical detail, including how to redeploy after a code change.
 
 ## Gotchas
 
@@ -272,103 +409,6 @@ The steps below are the command-line version, which does registry-create, build,
 container-create in a clear order. The console does the same things — just with the "deploy the
 container" screen appearing earlier than the image it needs.
 
-## Steps
-
-`<LIKE_THIS>` marks a value you fill in as you go; earlier steps hand you the later ones.
-
-1. **Make a place to store the built container.**
-
-   ```bash
-   scw registry namespace create name=freeagent-mcp-remote region=fr-par
-   ```
-
-   A **registry** is cloud storage for containers; a **namespace** is a named folder inside
-   it, here grouping everything for this project.
-
-2. **Build the container and upload it.**
-
-   ```bash
-   docker build --platform linux/amd64 -t rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest .
-   docker login rg.fr-par.scw.cloud -u nologin -p <YOUR_SCALEWAY_SECRET_KEY>
-   docker push rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest
-   ```
-
-   `<YOUR_SCALEWAY_SECRET_KEY>` is the same secret key you used for `scw init`.
-
-   `--platform linux/amd64` builds the container for the kind of chip Scaleway's servers
-   use rather than your Mac's — see [Serverless containers, and which chip they run
-   on](#serverless-containers-and-which-chip-they-run-on) for why it matters. One
-   consequence: on an Apple Silicon Mac this image will **not** run on your own machine, so
-   this is not the version to test locally. If you want to check the container works before
-   deploying, build it once **without** `--platform` (which builds it for your own machine),
-   run and check that version locally, then build again **with** `--platform linux/amd64`
-   for the push above.
-
-3. **Create the running service, and note the address it gives you.**
-
-   ```bash
-   scw container namespace create name=freeagent-mcp-remote region=fr-par
-   # note the ID it prints, as <NAMESPACE_ID>
-
-   scw container container create \
-     name=freeagent-mcp-remote \
-     namespace-id=<NAMESPACE_ID> \
-     registry-image=rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest \
-     port=8080 min-scale=0 max-scale=1 memory-limit=256 cpu-limit=140 \
-     privacy=public region=fr-par
-   # note the ID it prints, as <CONTAINER_ID>, and the public URL, as <CONTAINER_URL>
-   ```
-
-   `min-scale=0` lets the service sleep when unused, so it costs nothing while idle; it wakes
-   on the next request. The first request after a nap is slower, and you may have to approve
-   access again (see step 8).
-
-4. **Tell FreeAgent where to send you back after you approve access.**
-
-   In the [FreeAgent Developer Dashboard](https://dev.freeagent.com/), open your app and add
-   this as an **OAuth redirect URI**:
-
-   ```
-   <CONTAINER_URL>/auth/callback
-   ```
-
-   This is the connector's own address. It's separate from the `http://localhost:8723/callback`
-   you set for the command-line tool in setup — both can be registered at the same time.
-
-5. **Give the service its settings.**
-
-   ```bash
-   scw container container update <CONTAINER_ID> region=fr-par \
-     environment-variables.PORT=8080 \
-     environment-variables.PUBLIC_BASE_URL=<CONTAINER_URL> \
-     secret-environment-variables.FREEAGENT_CLIENT_ID=<YOUR_CLIENT_ID> \
-     secret-environment-variables.FREEAGENT_CLIENT_SECRET=<YOUR_CLIENT_SECRET>
-   ```
-
-   The client ID and secret are the same ones in your `.env`. Do **not** set
-   `FREEAGENT_DEV_TOKEN` here — it's a local-only shortcut, and on a public server it would be
-   a standing security hole.
-
-6. **Deploy.**
-
-   ```bash
-   scw container container deploy <CONTAINER_ID> region=fr-par
-   ```
-
-7. **Check it's alive.** Open `<CONTAINER_URL>/health` in a browser — you should see
-   `{"status": "healthy", ...}`.
-
-8. **Add it to Claude.** In Claude: Settings → Connectors → Add custom connector, and enter
-   `<CONTAINER_URL>/mcp` as the address. Leave the optional OAuth fields blank. Claude walks
-   you through approving access, which finishes on FreeAgent's own consent screen; approve
-   there and you're connected. There is no token to copy anywhere.
-
-If the connector stops responding after a quiet spell, that's the sleeping behaviour from
-step 3 — reconnecting in Claude wakes it and re-approves access.
-
-The [deployment runbook](docs/plans/freeagent-mcp-remote-deployment.md) is the same process
-with more technical detail, including how to redeploy after a code change.
-
 # [WIP] The Claude connector
 
 Not ready yet. When it is, you'll be able to add this to Claude as a connector and ask
@@ -383,8 +423,7 @@ questions in plain language rather than calling endpoints yourself:
 - Track time, tasks and projects
 
 The difference from the command-line tool is that the connector exposes each of these as a
-separate, narrow capability rather than one general "call anything" command — for reasons
-under [Safety](#safety) below.
+separate, narrow capability rather than one general "call anything" command.
 
 A simpler, **read-only** version of the connector can be deployed and used in Claude today —
 see [Deploying the read-only connector](#deploying-the-read-only-connector) below. The full
