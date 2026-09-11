@@ -1,8 +1,18 @@
-"""FastMCP server entrypoint.
+"""FastMCP server for the FreeAgent connector.
 
-Runs stateless: the current MCP protocol revision has no protocol-level sessions, and
-nothing here needs them (no elicitation, sampling or resource subscriptions), which is
-what makes a scale-to-zero container a clean fit.
+`create_server()` is the connector's single, transport-agnostic factory. It assembles
+the configured server (auth, FreeAgent client, tools, /health) but never opens a socket —
+so "local" vs "remote" is decided by how the returned object is run and which env vars are
+set, not by a different builder:
+
+- deployed / remote: `main()` runs it over HTTP inside the Scaleway container.
+- tests: import it and attach an in-memory / ASGI transport, no socket.
+- local dev: `fastmcp dev` loads it; FREEAGENT_DEV_TOKEN swaps the OAuth flow for a token.
+
+This is the connector in `src/`; the always-local command-line caller lives in `scripts/`
+and is never deployed. The interim read-only server (`src/readonly_server.py`) is a
+deliberately separate deployable entrypoint with its own `create_readonly_server()`
+factory, so it does not go through `create_server()`.
 """
 
 from __future__ import annotations
@@ -11,11 +21,13 @@ import os
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from src.auth import FREEAGENT_API_BASE_URL, build_auth_provider
 from src.client import FreeAgentClient
+from src.log import logger
 from src.tools import company
 
 SERVICE_NAME = "freeagent-mcp-remote"
@@ -52,6 +64,13 @@ def freeagent_token_provider() -> str:
 def create_server() -> FastMCP:
     """Build the configured FastMCP server."""
     mcp: FastMCP = FastMCP(SERVICE_NAME, auth=build_auth_provider())
+    # Central record of every tool invocation. StructuredLoggingMiddleware's on_message
+    # hook fires once per MCP request; `methods=["tools/call"]` narrows that to tool calls,
+    # so a new tool module cannot forget to log the way a per-handler call could.
+    # `include_payloads` logs the arguments — the bearer token is never one of them.
+    mcp.add_middleware(
+        StructuredLoggingMiddleware(logger=logger, include_payloads=True, methods=["tools/call"])
+    )
 
     client = FreeAgentClient(
         token_provider=freeagent_token_provider,

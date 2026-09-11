@@ -1,0 +1,15 @@
+.env
+.env.*
+scripts/
+tests/
+docs/
+.venv/
+.git/
+.gitignore
+**/__pycache__/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+*.md
+# pyproject.toml declares readme = "README.md", so the build needs it in context.
+!README.md

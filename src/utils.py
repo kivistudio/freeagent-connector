@@ -7,21 +7,12 @@ this project.
 
 from __future__ import annotations
 
-import json
-import logging
 import re
 from typing import Annotated, Any
 
 from pydantic import AfterValidator, BaseModel
 
-logger = logging.getLogger("freeagent_mcp.tools")
-
 _SAFE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
-
-# Strings longer than this are truncated in logs — long values are the ones most likely
-# to carry a secret or personal data we have no reason to persist.
-_LOG_TRUNCATE_OVER = 100
-_LOG_TRUNCATE_TO = 20
 
 
 def safe_id(value: str) -> str:
@@ -41,24 +32,23 @@ def safe_id(value: str) -> str:
     return value
 
 
-# The form tool signatures should use, so FastMCP surfaces a field-level validation
-# error the model can recover from rather than an opaque exception.
+# A `str` subtype that runs `safe_id` automatically during validation. `Annotated[str, x]`
+# tags a plain `str` with metadata `x`; Pydantic (the library FastMCP uses to parse tool
+# arguments) reads that metadata, and `AfterValidator` tells it to pass the value through
+# `safe_id` once it has confirmed the value is a string.
+#
+# Declare a tool parameter as `SafeId` instead of `str` and the check runs at the schema
+# boundary, before the handler body. A bad ID then comes back as a field-level validation
+# error the model can read and retry, rather than an exception raised mid-handler.
 SafeId = Annotated[str, AfterValidator(safe_id)]
 
 
-def _query_value(value: Any) -> str:
-    """Render a value the way FreeAgent's query string expects it.
+def build_params(**kwargs: Any) -> dict[str, Any]:
+    """Build a query-string mapping, dropping unset (None) values.
 
-    Booleans need care: `str(True)` is `"True"`, which FreeAgent rejects.
+    Values keep their native types; httpx renders them when it builds the URL.
     """
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
-
-
-def build_params(**kwargs: Any) -> dict[str, str]:
-    """Build a query-string mapping, dropping unset values and stringifying the rest."""
-    return {k: _query_value(v) for k, v in kwargs.items() if v is not None}
+    return {k: v for k, v in kwargs.items() if v is not None}
 
 
 def _body_value(value: Any) -> Any:
@@ -79,20 +69,3 @@ def build_body(**kwargs: Any) -> dict[str, Any]:
     real numbers and booleans. Pydantic models (line items) become plain dicts.
     """
     return {k: _body_value(v) for k, v in kwargs.items() if v is not None}
-
-
-def _redact(value: Any) -> Any:
-    if isinstance(value, str) and len(value) > _LOG_TRUNCATE_OVER:
-        return value[:_LOG_TRUNCATE_TO] + "..."
-    return value
-
-
-def log_tool_call(tool: str, params: dict[str, Any] | None = None) -> None:
-    """Record that a tool was invoked, with long values truncated.
-
-    Never logs the bearer token — it is not a tool parameter and must not be passed here.
-    """
-    record: dict[str, Any] = {"tool": tool}
-    if params:
-        record["params"] = {k: _redact(v) for k, v in params.items()}
-    logger.info(json.dumps(record, default=str))

@@ -20,7 +20,8 @@ initially I thought I'd be developing on top of it, I decided to start from scra
 | **A FreeAgent command-line tool** — read your accounting data from a terminal | **Works now** |
 | **A Claude connector** — ask Claude questions about your books                | **WIP**       |
 
-They share the same setup, so following the steps below gets you the working half today.
+They share the same FreeAgent setup, so following the steps below gets you the working half
+today.
 
 ## How it works
 
@@ -41,10 +42,13 @@ explains it in plain terms (think "a USB-C port for AI").
 
 # Setup
 
-Needed for both the command-line tool and (later) the connector. Written assuming you can
-follow a terminal, but haven't necessarily built a Python service before.
+Written assuming you can follow a terminal, but haven't necessarily built a Python service
+before.
 
-## 1. Get FreeAgent credentials
+## Get FreeAgent credentials
+
+This is the one part of setup shared by both the command-line tool and (later) the
+connector.
 
 Before connecting to FreeAgent you need to register an "app". That gives you two strings —
 a **client ID** and a **client secret** — which together identify this server to FreeAgent.
@@ -71,7 +75,12 @@ your own account.
    into git, thanks to [`.gitignore`](.gitignore). Copy the OAuth identifier and secret
    into it as `FREEAGENT_CLIENT_ID` and `FREEAGENT_CLIENT_SECRET`.
 
-## 2. Install
+# The command-line tool
+
+This works today. It reads any part of your FreeAgent account from the terminal, handling
+the login for you.
+
+## 1. Install
 
 The only thing you need installed first is [uv](https://docs.astral.sh/uv/), a tool that
 manages Python projects. It fetches the right version of Python for you, so you don't need
@@ -101,7 +110,7 @@ cp .env.example .env    # then add the credentials from the step above
 `uv run <command>` runs things inside that environment, which is why every command below
 starts with it.
 
-## 3. Authorise
+## 2. Authorise
 
 ```bash
 uv run scripts/fa_auth.py
@@ -119,10 +128,7 @@ so this is genuinely a one-time step.
 > follow automatically so the two can't get crossed. Worth doing before anything that
 > writes; not worth it for reading, since a sandbox has none of your actual data.
 
-# Using the command-line tool
-
-This works today. It reads any part of your FreeAgent account from the terminal, handling
-the login for you.
+## Calling endpoints
 
 FreeAgent's data is organised into "endpoints" — `/company`, `/invoices`,
 `/bank_accounts` and so on. The [FreeAgent API docs](https://dev.freeagent.com/docs/) list
@@ -183,6 +189,226 @@ uv run fastmcp call scripts/freeagent_api_caller.py request path=/invoices shape
 Changing data (`POST`, `PUT`, `DELETE`) needs `confirm_write=true`. That's deliberate
 friction — these are your real accounting records. Use the sandbox for those.
 
+# Deploying the read-only connector
+
+To use a connector inside Claude, the server has to live at a **public web address**. Claude
+reaches a connector from Anthropic's own servers, not from your computer, so a program
+running only on your machine can't be seen. "Deploying" just means putting the server
+somewhere on the internet that Claude can reach.
+
+What you can deploy today is the **read-only** version. It can look up anything in your
+FreeAgent account but cannot create, change or delete anything — which is what makes it safe
+to expose as a single general "read any endpoint" tool, rather than waiting for the narrow
+per-task tools of the full connector.
+
+These steps use [Scaleway](https://www.scaleway.com/), a European cloud host, because that's
+what this project was set up for. Another host that runs containers would also work, but the
+commands below are Scaleway-specific.
+
+## Setup Scaleway
+
+- [Docker](https://www.docker.com/products/docker-desktop/) installed and **running** — open
+  Docker Desktop and wait for it to finish starting.
+
+- A [Scaleway](https://console.scaleway.com/) account and the
+  [Scaleway CLI installed](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/). For
+  example on a Mac with Homebrew:
+
+  ```bash
+  brew install scw
+  ```
+
+- A [Scaleway API key](https://www.scaleway.com/en/docs/iam/how-to/create-api-keys/) to log
+  the CLI in with. Generate one from the console → IAM → API keys; Object Storage isn't
+  needed, so you can skip that step:
+
+  ![Scaleway's "Generate an API key" dialog](docs/images/scaleway-api-token.png)
+
+  The screen that follows hands you a ready-made `scw init` command — paste it into your
+  terminal, and keep the secret key somewhere safe, because the console won't show it again.
+  During `scw init` the defaults are fine; the one prompt worth declining is the offer to add
+  an SSH key (that's only for logging into virtual-machine Instances, which this project
+  doesn't use).
+
+  `scw init` doesn't only log you in — it writes a **profile**: a small settings file on your
+  own computer (`~/.config/scw/config.yaml`) that every `scw` command reads, so you don't
+  retype your key or your project each time. It looks like this:
+
+  ```yaml
+  active_profile: newprofile
+  profiles:
+    newprofile:
+      access_key: SCWXXXXXXXXXXXXXXXXX
+      secret_key: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+      default_organization_id: 00000000-0000-0000-0000-000000000000
+      default_project_id: 00000000-0000-0000-0000-000000000000
+      default_region: fr-par
+      default_zone: fr-par-1
+  ```
+
+  A **profile** is just a named set of those settings — your API key, and which organisation,
+  project and region commands act on by default. You can keep more than one (a work account
+  and a personal one, say) and switch between them; `active_profile` names the one in use.
+  Because it lives only on your machine, you won't find "the profile" anywhere in the Scaleway
+  console.
+
+## Steps
+
+`<LIKE_THIS>` marks a value you fill in as you go; earlier steps hand you the later ones.
+
+1. **Make a place to store the built container.**
+
+   ```bash
+   scw registry namespace create name=<PROJECT_NAME> region=fr-par
+   ```
+
+   A **registry** is cloud storage for your containers; a **namespace** is a named folder inside
+   it. This command just makes the empty folder —
+   nothing is uploaded yet. You can see it afterwards in the console under **Container
+   Registry**.
+
+2. **Build the container and upload it.**
+
+   ```bash
+   docker build --platform linux/amd64 -t rg.fr-par.scw.cloud/<PROJECT_NAME>/server:latest .
+   scw registry login region=fr-par
+   docker push rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest
+   ```
+
+   These run in order: `docker build` packages the project into a container **image** on your
+   own machine; `scw registry login` signs in to your registry — with `<YOUR_SCALEWAY_SECRET_KEY>`,
+   the same secret key from `scw init`, as the password; `docker push` uploads the image into
+   the namespace you made in step 1, where it then shows up in the console under **Container
+   Registry**.
+
+   `--platform linux/amd64` builds the container for the kind of chip Scaleway's servers
+   use rather than your Mac's — see [Serverless containers, and which chip they run
+   on](#serverless-containers-and-which-chip-they-run-on) for why it matters. One
+   consequence: on an Apple Silicon Mac this image will **not** run on your own machine, so
+   this is not the version to test locally. If you want to check the container works before
+   deploying, build it once **without** `--platform` (which builds it for your own machine),
+   run and check that version locally, then build again **with** `--platform linux/amd64`
+   for the push above.
+
+3. **Create the running service, and note the address it gives you.**
+
+   ```bash
+   scw container namespace create name=freeagent-mcp-remote region=fr-par
+   # note the ID it prints, as <NAMESPACE_ID>
+   ```
+
+   This command creates a **Serverless Containers namespace** —
+   the space that _runs_ services, which is a different thing from the registry that _stores_
+   images.
+
+   ```bash
+   scw container container create \
+     name=freeagent-mcp-remote \
+     namespace-id=<NAMESPACE_ID> \
+     registry-image=rg.fr-par.scw.cloud/freeagent-mcp-remote/server:latest \
+     port=8080 min-scale=0 max-scale=1 memory-limit=256 cpu-limit=140 \
+     privacy=public region=fr-par
+   # note the ID it prints, as <CONTAINER_ID>, and the public URL, as <CONTAINER_URL>
+   ```
+
+   This creates the running container itself from the image you pushed, and prints its public web address.
+
+   Afterwards you'll find it in the console under **Containers**.
+
+   `min-scale=0` lets the service sleep when unused, so it costs nothing while idle; it wakes
+   on the next request. The first request after a nap is slower, and you may have to approve
+   access again (see step 8).
+
+4. **Tell FreeAgent where to send you back after you approve access.**
+
+   In the [FreeAgent Developer Dashboard](https://dev.freeagent.com/), open your app and add
+   this as an **OAuth redirect URI**:
+
+   ```
+   <CONTAINER_URL>/auth/callback
+   ```
+
+   This is the connector's own address. It's separate from the `http://localhost:8723/callback`
+   you set for the command-line tool in setup — both can be registered at the same time.
+
+5. **Give the service its settings.**
+
+   ```bash
+   scw container container update <CONTAINER_ID> region=fr-par \
+     environment-variables.PORT=8080 \
+     environment-variables.PUBLIC_BASE_URL=<CONTAINER_URL> \
+     secret-environment-variables.FREEAGENT_CLIENT_ID=<YOUR_CLIENT_ID> \
+     secret-environment-variables.FREEAGENT_CLIENT_SECRET=<YOUR_CLIENT_SECRET>
+   ```
+
+   The client ID and secret are the same ones in your `.env`. Do **not** set
+   `FREEAGENT_DEV_TOKEN` here — it's a local-only shortcut, and on a public server it would be
+   a standing security hole.
+
+6. **Deploy.**
+
+   ```bash
+   scw container container deploy <CONTAINER_ID> region=fr-par
+   ```
+
+   Up to now you've only _described_ the container; this applies everything you've set and
+   starts it (or restarts it with the new settings). Run it again after any later change to
+   the image or the settings.
+
+7. **Check it's alive.** Open `<CONTAINER_URL>/health` in a browser — you should see
+   `{"status": "healthy", ...}`.
+
+8. **Add it to Claude.** In Claude: Settings → Connectors → Add custom connector, and enter
+   `<CONTAINER_URL>/mcp` as the address. Leave the optional OAuth fields blank. Claude walks
+   you through approving access, which finishes on FreeAgent's own consent screen; approve
+   there and you're connected. There is no token to copy anywhere.
+
+If the connector stops responding after a quiet spell, that's the sleeping behaviour from
+step 3 — reconnecting in Claude wakes it and re-approves access.
+
+The [deployment runbook](docs/plans/freeagent-mcp-remote-deployment.md) is the same process
+with more technical detail, including how to redeploy after a code change.
+
+## Gotchas
+
+### A note on projects
+
+When you open the Scaleway console you land inside a **project** — a named space that holds
+your resources. Scaleway starts you with one, so an empty "Resources overview" just means
+nothing has been created in it yet. Everything the steps below create — the registry, the
+container — appears in this project once it exists.
+
+Two things so the console doesn't mislead you:
+
+- **`scw init` decides which project your commands act on.** When it asks for a default
+  project, pick the same one you're looking at in the console — otherwise your resources land
+  in a different project than the one you're watching. The **Copy ID** button next to the
+  project's name gives you its ID if you need to check or set it.
+- **Ignore the "Create Instance" button.** An _Instance_ is a full virtual machine, which this
+  project doesn't need. The connector runs as a lighter _Serverless Container_, created by the
+  commands below — you never click "Create Instance".
+
+### "namespace" means two things
+
+Scaleway uses "namespace" for two separate things, and this deploy touches both:
+
+- a **Container Registry namespace** — storage that holds your built image, and
+- a **Serverless Containers namespace** — the space that holds the running service.
+
+Creating the Serverless Containers namespace **automatically creates a matching Container
+Registry namespace** in the same project, so you don't create the registry one separately.
+
+**you have to build and push the image _before_ you can
+finish creating the container.** If you create the namespace in the console, it drops you
+straight onto a "Deploy a Container" screen — but the **Image** field there stays empty and
+greyed out until an image has actually been pushed to the registry. So if you land on that
+screen with nothing to select, that's expected, not a bug: leave it, do the build and push
+first, then come back and the image will be there to choose.
+
+The steps below are the command-line version, which does registry-create, build, push and
+container-create in a clear order. The console does the same things — just with the "deploy the
+container" screen appearing earlier than the image it needs.
+
 # [WIP] The Claude connector
 
 Not ready yet. When it is, you'll be able to add this to Claude as a connector and ask
@@ -197,27 +423,17 @@ questions in plain language rather than calling endpoints yourself:
 - Track time, tasks and projects
 
 The difference from the command-line tool is that the connector exposes each of these as a
-separate, narrow capability rather than one general "call anything" command — for reasons
-under [Safety](#safety) below.
+separate, narrow capability rather than one general "call anything" command.
+
+A simpler, **read-only** version of the connector can be deployed and used in Claude today —
+see [Deploying the read-only connector](#deploying-the-read-only-connector) below. The full
+version described above isn't ready yet.
 
 # For developers
 
-## Everyday commands
-
-```bash
-uv run pytest                  # run the tests
-uv run pytest --lf             # just the ones that failed last time
-uv run ruff format .           # auto-format the code
-uv run ruff check .            # find likely mistakes and style problems
-uv run mypy                    # check the types line up
-```
-
-`mypy` is the one worth not skipping: it's set to strict, so it catches a whole class of
-"this could be nothing here" bugs before they ever run.
-
 ## Checks on commit
 
-A [git hook](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) runs all four
+A [git hook](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) runs checks
 automatically every time you commit. Enable it once:
 
 ```bash
@@ -273,6 +489,30 @@ never inputs to the program — deleting any of them costs nothing but a slower 
 If anything ever behaves strangely, `rm -rf .mypy_cache .pytest_cache .ruff_cache` is a
 safe reset.
 
+## Serverless containers, and which chip they run on
+
+Scaleway runs the connector as a _serverless container_: you hand it the built image, and
+it runs the container only while a request is being handled, then puts it back to sleep
+when nothing is using it (that is what `min-scale=0` in step 3 of the deploy does). You
+never rent or look after a server that sits running all day — you pay for the moments it is
+actually working, and the first request after a nap is a little slower while it wakes.
+
+The catch is which computer that container runs on. A container image holds real compiled
+programs — the language runtime and its libraries — and each is built for one specific kind
+of computer chip. Two matter here:
+
+- **Apple Silicon** — the M1/M2/M3 chip in most recent Macs, called _arm64_.
+- **Intel/AMD chips** — called _amd64_, which is what Scaleway's servers use.
+
+An image built for one chip will not run on the other. Build on an Apple Silicon Mac with
+no special flag and you get an _arm64_ image; push that to Scaleway, which is _amd64_, and
+it will not start. The `--platform linux/amd64` flag on `docker build` is what fixes this:
+it builds the image for Scaleway's chip rather than your Mac's. Your Mac does the build by
+translating as it goes, so it is a little slower, but the result runs on Scaleway. The same
+rule in reverse means that amd64 image will not run on an Apple Silicon Mac — which is fine,
+because it is built for Scaleway, not your laptop. If your own computer already has an
+Intel/AMD chip, the flag changes nothing, since you are building for that chip anyway.
+
 # If you get stuck
 
 I built this for my own company's books, and wrote it up properly in case it's useful to
@@ -282,3 +522,28 @@ If you're trying to set up something like this and it isn't going well, I do thi
 work professionally and I'm happy to talk. <!-- TODO: name + how to get in touch -->
 
 If you've found a bug or something here is wrong, an issue is welcome.
+
+# Glossary
+
+Plain-English definitions of the outside tools this project relies on. You don't need to
+understand these to follow the steps above — they're here in case a name is unfamiliar.
+
+**Docker** — a tool that packages a program together with everything it needs to run (the
+right language version, the libraries, the settings) into one self-contained bundle called a
+_container_. The point is that the bundle behaves the same on your laptop as on a cloud
+server, so "it works on my machine" stops being a gamble. Here it's used to build the
+connector into a container that Scaleway then runs.
+
+**Container** — the self-contained bundle Docker produces: the app plus its whole
+environment, kept separate from whatever else is on the machine. It starts, stops and moves
+around as a single unit.
+
+**Scaleway** — a European cloud hosting company. "The cloud" just means someone else's
+computers that you rent over the internet rather than running your own. This project runs the
+connector's container on Scaleway so it has a permanent public web address for Claude to
+reach.
+
+**Container registry** — cloud storage specifically for containers, a little like a photo
+library but for built app bundles. You upload ("push") your container to the registry, and
+the cloud pulls it from there when it runs it. A **namespace** is a named folder inside the
+registry that keeps one project's containers together.

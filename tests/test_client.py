@@ -286,6 +286,69 @@ class TestPathSafetyGuard:
         assert route.called
 
 
+class TestGetPaginated:
+    """`get_paginated` keeps the pagination headers `get` discards, so a caller can tell a
+    truncated list from a complete one. It surfaces the next page *number*, never the full
+    Link URL — feeding a URL back as a path would trip the origin guard by design.
+    """
+
+    NEXT_LINK = (
+        '<https://api.freeagent.com/v2/invoices?page=2&per_page=25>; rel="next", '
+        '<https://api.freeagent.com/v2/invoices?page=9&per_page=25>; rel="last"'
+    )
+
+    @respx.mock
+    async def test_returns_body_and_next_page_when_more_pages_exist(
+        self, client: FreeAgentClient
+    ) -> None:
+        respx.get(f"{DEFAULT_BASE_URL}/invoices").mock(
+            return_value=httpx.Response(
+                200,
+                json={"invoices": [{"id": 1}]},
+                headers={"Link": self.NEXT_LINK, "X-Total-Count": "212"},
+            )
+        )
+        body, pagination = await client.get_paginated("/invoices")
+        assert body == {"invoices": [{"id": 1}]}
+        assert pagination == {"next_page": 2, "total_count": 212}
+
+    @respx.mock
+    async def test_returns_empty_pagination_when_there_is_no_next_page(
+        self, client: FreeAgentClient
+    ) -> None:
+        respx.get(f"{DEFAULT_BASE_URL}/company").mock(
+            return_value=httpx.Response(200, json={"company": {}})
+        )
+        body, pagination = await client.get_paginated("/company")
+        assert body == {"company": {}}
+        assert pagination == {}
+
+    @respx.mock
+    async def test_no_next_page_on_the_last_page(self, client: FreeAgentClient) -> None:
+        """A last page advertises prev/first links but no `next`; nothing actionable, so no
+        pagination metadata is surfaced."""
+        last_page_link = (
+            '<https://api.freeagent.com/v2/invoices?page=1&per_page=25>; rel="first", '
+            '<https://api.freeagent.com/v2/invoices?page=8&per_page=25>; rel="prev"'
+        )
+        respx.get(f"{DEFAULT_BASE_URL}/invoices").mock(
+            return_value=httpx.Response(
+                200,
+                json={"invoices": []},
+                headers={"Link": last_page_link, "X-Total-Count": "212"},
+            )
+        )
+        _, pagination = await client.get_paginated("/invoices")
+        assert pagination == {}
+
+    @respx.mock
+    async def test_is_guarded_against_origin_escape(self, client: FreeAgentClient) -> None:
+        """The new read path must be behind the same guard as every other request."""
+        with pytest.raises(UnsafePathError):
+            await client.get_paginated("https://evil.com/steal")
+        assert respx.calls.call_count == 0
+
+
 class TestErrorHandling:
     @respx.mock
     async def test_raises_with_status_and_error_code(self, client: FreeAgentClient) -> None:

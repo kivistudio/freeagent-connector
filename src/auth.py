@@ -20,7 +20,7 @@ from fastmcp.server.auth import TokenVerifier
 from fastmcp.server.auth.auth import AccessToken
 from fastmcp.server.auth.oauth_proxy import OAuthProxy
 
-from src.utils import logger
+from src.log import logger
 
 FREEAGENT_API_BASE_URL = "https://api.freeagent.com/v2"
 FREEAGENT_SANDBOX_API_BASE_URL = "https://api.sandbox.freeagent.com/v2"
@@ -108,12 +108,7 @@ def _required_env(name: str) -> str:
 def build_auth_provider(
     require_authorization_consent: bool | Literal["remember", "external"] = True,
 ) -> OAuthProxy:
-    """Construct the OAuthProxy for FreeAgent from environment configuration.
-
-    `client_storage` and `jwt_signing_key` are deliberately left at their defaults: the
-    encrypted local file store is wiped on every cold start, which is the accepted
-    tradeoff recorded in the spec's storage decision, not an oversight.
-    """
+    """Construct the OAuthProxy for FreeAgent from environment configuration."""
     client_id = _required_env("FREEAGENT_CLIENT_ID")
     client_secret = _required_env("FREEAGENT_CLIENT_SECRET")
     public_base_url = _required_env("PUBLIC_BASE_URL")

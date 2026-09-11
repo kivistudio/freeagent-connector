@@ -32,3 +32,12 @@ def make_server(fa_client: FreeAgentClient) -> Callable[..., FastMCP]:
         return mcp
 
     return _make
+
+
+@pytest.fixture
+def oauth_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The environment build_auth_provider() requires, for tests that build a real server."""
+    monkeypatch.setenv("FREEAGENT_CLIENT_ID", "cid")
+    monkeypatch.setenv("FREEAGENT_CLIENT_SECRET", "csecret")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://mcp.example.com")
+    monkeypatch.delenv("FREEAGENT_DEV_TOKEN", raising=False)

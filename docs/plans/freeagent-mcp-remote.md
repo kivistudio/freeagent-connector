@@ -254,10 +254,10 @@ Other relevant points from this revision:
 | File (Python) | Responsibility |
 |---|---|
 | `src/client.py` | `FreeAgentClient` — thin `httpx`-based wrapper around the FreeAgent API, with the origin-check security guard |
-| `src/utils.py` | `safe_id`, response/error helpers, `build_params`, `build_body`, `log_tool_call` |
+| `src/utils.py` | `safe_id`, response/error helpers, `build_params`, `build_body` |
 | `src/tools/*.py` | One module per FreeAgent resource group; each exports `register(mcp, client)` and defines `@mcp.tool`-decorated functions |
 | `src/auth.py` | Builds and configures the `OAuthProxy` instance (upstream FreeAgent endpoints/credentials; `client_storage` and `jwt_signing_key` left at their defaults per the storage decision above) |
-| `src/server.py` | Builds the `FastMCP` instance with `auth=<OAuthProxy instance>`, registers `/health` via `custom_route`, registers every module in `TOOL_MODULES`, runs with `stateless_http=True` |
+| `src/server.py` | Builds the `FastMCP` instance with `auth=<OAuthProxy instance>`, adds `StructuredLoggingMiddleware` for tool-call logging, registers `/health` via `custom_route`, registers every module in `TOOL_MODULES`, runs with `stateless_http=True` |
 
 There is no local authorization script in this design, and no storage module to build — `OAuthProxy`'s browser-based consent flow and its own default local file store are the entire authorization mechanism.
 
@@ -303,8 +303,9 @@ Organized by component. Each item is one meaningful deliverable.
 - [x] `src/client.py` (`FreeAgentClient`, `FreeAgentApiError`, `UnsafePathError`) with the origin-check guard
   - Python's `urljoin` behaviour was verified empirically rather than assumed. Result: `//evil.com/x` is defused by the leading-slash strip and stays on our origin, but `///evil.com/x` genuinely resolves to another host and is caught **only** by the origin comparison. Both are locked in as tests.
   - No form-encoded helpers: form bodies were only ever for OAuth token exchange, which `OAuthProxy` now owns.
-- [x] `src/utils.py` (`safe_id`, `SafeId`, `build_params`, `build_body`, `log_tool_call`)
+- [x] `src/utils.py` (`safe_id`, `SafeId`, `build_params`, `build_body`)
   - `build_params` renders booleans as `true`/`false`; Python's `str(True)` gives `"True"`, which FreeAgent rejects.
+  - Tool-call logging was originally a hand-rolled `log_tool_call` helper here; it is now FastMCP's `StructuredLoggingMiddleware`, registered once in `src/server.py`. Gotchas when wiring it: the `on_message` hook must be filtered with `methods=["tools/call"]` (the exact JSON-RPC method string — a wrong value logs nothing silently), and `StructuredLoggingMiddleware` exposes no `max_payload_length`, so there is no built-in payload truncation (the old `log_tool_call` truncation was dropped deliberately — it was never redaction).
 - [x] `build_body` added as a new shared helper; preserves falsy zeros, serialises Pydantic models
 - [x] Test coverage for both, including every security-guard rejection case
 
@@ -336,6 +337,7 @@ Full endpoint/field/quirk detail: [Tool Inventory](./freeagent-mcp-remote-tool-i
 
 ### 4. FastMCP server entrypoint
 - [x] `src/server.py`: `FreeAgentClient` built once at startup, one `FastMCP` instance with `auth=<OAuthProxy>`, `GET /health` via `@mcp.custom_route`, modules registered from `TOOL_MODULES`, runs with `stateless_http=True`
+- [x] Tool-call logging via `StructuredLoggingMiddleware` (`methods=["tools/call"]`, `include_payloads=True`), replacing the per-handler `log_tool_call`; see the utils task above for the wiring gotchas
 - [x] `FREEAGENT_DEV_TOKEN` local escape hatch — opt-in only, with a test asserting it does nothing unless explicitly set
 - [x] Test coverage against the real ASGI app: `/health` needs no credentials; `/mcp` rejects unauthenticated requests with a `WWW-Authenticate` challenge; the advertised protected-resource metadata document is followed and confirmed to exist
   - Confirmed live: the challenge points at `/.well-known/oauth-protected-resource/mcp`, and `OAuthProxy` auto-registers `/auth/callback`.
@@ -367,14 +369,19 @@ Full endpoint/field/quirk detail: [Tool Inventory](./freeagent-mcp-remote-tool-i
   - `.venv/`, caches, `docs/`, `tests/`
 
   Exclude all of the above explicitly.
-- [ ] Build locally and confirm `docker run` starts and `/health` succeeds without requiring valid FreeAgent/OAuthProxy credentials to be present
+- [ ] Build locally and confirm `docker run` starts and `/health` succeeds. The container needs `FREEAGENT_CLIENT_ID`, `FREEAGENT_CLIENT_SECRET` and `PUBLIC_BASE_URL` set to *start at all* — `build_auth_provider()` is called eagerly when the server is constructed (`create_readonly_server`/`create_server`) and raises on any missing one (`auth.py::_required_env`), so the process exits before uvicorn binds. Dummy values are fine for a local `/health` check: they only construct the `OAuthProxy` and are never validated against FreeAgent. No user access token is required, and `/health` itself is unauthenticated. Fail-fast on missing config is deliberate — a container that booted "healthy" without its OAuth config would pass health checks while being unable to serve a single request.
 
 ### 6. Deployment
 - [ ] Follow the [Deployment Runbook](./freeagent-mcp-remote-deployment.md): Container Registry namespace, image push, Container namespace/container (`min-scale=0`, `max-scale=1`), FreeAgent OAuth app registration + redirect URI, environment variables, deploy, add the connector in Claude (or any MCP client)
 
 ### 7. End-to-end verification
-- [ ] Local Docker smoke test: `/health` succeeds unauthenticated; an unauthenticated `POST /mcp` is rejected with a proper OAuth challenge (401 + `WWW-Authenticate`, not a bare 401 — confirm the exact spec-required response shape at implementation time)
+- [ ] Local Docker smoke test: `/health` succeeds unauthenticated; an unauthenticated `POST /mcp` is rejected with a proper OAuth challenge (401 + `WWW-Authenticate`, not a bare 401 — confirm the exact spec-required response shape at implementation time). Note: the container needs `FREEAGENT_CLIENT_ID`, `FREEAGENT_CLIENT_SECRET` and `PUBLIC_BASE_URL` set to start (dummy values suffice for this smoke test — see task 5); without them it exits at boot rather than serving `/health`.
 - [ ] Repeat against the deployed Scaleway Container
 - [ ] Live verification via an MCP client: add the connector, complete the browser OAuth consent flow (through to FreeAgent's real consent screen and back), confirm tools are listed, call `freeagent_get_company` (zero-side-effect read) and a filtered list call (e.g. `freeagent_list_projects` with a `view` param), confirm real data comes back
 - [ ] Cold-start behavior check specific to this design: force the container to scale to zero (or manually restart it), then make another tool call without reconnecting — confirm what actually happens (does the client silently re-prompt for consent, or does it show a broken-connector error requiring manual removal/re-add?). This is exploratory, not a pass/fail test — the accepted tradeoff means *some* form of reconnection is expected; the goal is understanding which form, so it's not a surprise in real use
 - [ ] Note for future reference: Claude.ai/Desktop's tool-call timeout is 300 seconds and its max tool result size is ~150,000 characters (re-verify current limits at implementation time). Every tool here is a single fast FreeAgent API round-trip well under that size, so no pagination/truncation handling is needed at this stage — revisit if a `list_*` tool is ever called against an account with thousands of records
+
+### 8. Continuous integration (CI)
+- [ ] Add a GitHub Actions workflow (`.github/workflows/ci.yml`) triggered on push to any branch and `pull_request` to `main`, running the same checks as `.githooks/pre-commit` (`ruff format --check`, `ruff check`, `mypy`, `pytest`) so they are enforced on the remote and not only in a bypassable local hook
+- [ ] The workflow must also run `docker build`. The local hook never builds the image — which is how a Dockerfile that could not build shipped undetected: `.dockerignore` excluded `README.md`, which `pyproject.toml` declares as the package readme, so `uv sync` failed at build time. A green build in CI would have caught it on the first push. GitHub runners are native amd64 Linux, so the build is fast and matches the Scaleway deploy target
+- [ ] Optionally run the built container and probe `/health` in CI. This is reliable on a GitHub runner (native amd64, no Docker-Desktop host-port quirk) even though the same probe was flaky locally on Apple Silicon
