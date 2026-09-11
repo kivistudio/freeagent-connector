@@ -40,23 +40,17 @@ def register(mcp: FastMCP, client: FreeAgentClient) -> None:
     async def freeagent_get(path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         """Read any FreeAgent API resource (GET only).
 
-        Ensure you know the FreeAgent API documentation (paths and argument shape) before
-        calling.
+        Paths and query parameters mirror the FreeAgent REST API — check its documentation
+        for the path and argument shape before calling.
+
+        Lists return 25 items per page by default; "per_page" raises that to at most 100.
+        When more pages remain, the result carries a "pagination" object, e.g.
+        {"next_page": 2, "total_count": 212}; its absence means the response is complete.
+        Read the rest by calling again with {"page": "2"} (etc.) in `params`.
 
         Args:
             path: Relative API path, e.g. "/company", "/contacts", "/invoices/123".
             params: Optional query-string filters, e.g. {"view": "open", "per_page": "100"}.
-
-        Note: by default only first 25 items are returned, you can change it to upto 100.
-        This is a read-only window onto the FreeAgent account: it can list and fetch.
-        Paths and query parameters mirror the
-        FreeAgent REST API.
-
-        Pagination: when a list has more pages than this call returned, the result carries
-        a "pagination" object, e.g. {"next_page": 2, "total_count": 212}; its absence means
-        the response is complete. Read the rest by calling again with {"page": "2"} (etc.)
-        in `params`. Do not conclude a record is absent from a list without checking for
-        "pagination" first — a page-sized result is often truncated, not the whole set.
         """
         with freeagent_errors():
             body, pagination = await client.get_paginated(path, params=params)
